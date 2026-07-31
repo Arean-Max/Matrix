@@ -1,21 +1,17 @@
 # Event Horizon
 
 Self-hosted software licensing with TPM-assisted device attestation for
-Windows applications. One Go server, one optional Rust trust daemon, one
-operations CLI, one vendor-side packager, one Rust client SDK.
+Windows applications.
 
 ## Components
 
 | Path | What it is |
 |------|------------|
 | `cmd/eh-server` | HTTP API server: SQLite storage, licensing, OOB codes |
-| `internal/store` | SQLite storage aggregate models |
-| `internal/wire` | Wire protocol schemas |
-| `internal/cryptox` | Key derivation and crypto primitives |
+| `rust/eh-trustd` | isolated TPM quote verifier: parses untrusted TPM bytes |
+| `internal/attestation` | TPM2 quote verification and MakeCredential |
 
-## Quickstart (server)
+## Attestation
 
-```sh
-go build -o bin/eh-server ./cmd/eh-server
-./bin/eh-server -config server.yaml
-```
+Attestation is TOFU-anchored: the server verifies quote and activation proofs
+under the EK/AK the client presents.

@@ -1,0 +1,13 @@
+[package]
+name = "eh-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Event Horizon protected-runtime VM and assembler"
+
+[dependencies]
+sha2.workspace = true
+hmac.workspace = true
+
+[dev-dependencies]
+hex.workspace = true

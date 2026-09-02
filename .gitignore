@@ -1,0 +1,19 @@
+# Build directories
+build/
+bin/
+*.exe
+*.lib
+*.pdb
+*.obj
+*.o
+*.a
+*.so
+*.dll
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# Go
+*.test

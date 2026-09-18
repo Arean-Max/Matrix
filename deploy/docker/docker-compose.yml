@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  event-horizon-server:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile
+    image: event-horizon/server:v12
+    container_name: event-horizon-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      - EH_DB_PASSPHRASE_FILE=/run/secrets/eh_db_passphrase
+    secrets:
+      - eh_db_passphrase
+    volumes:
+      - eh_db_data:/var/lib/event-horizon
+      - ../server-config.yaml:/etc/event-horizon/config.yaml:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8443/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - eh_internal_net
+
+secrets:
+  eh_db_passphrase:
+    file: ./secrets/db_passphrase.txt
+
+volumes:
+  eh_db_data:
+    driver: local
+
+networks:
+  eh_internal_net:
+    driver: bridge

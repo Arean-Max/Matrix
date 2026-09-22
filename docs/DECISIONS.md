@@ -170,3 +170,31 @@ via HKDF with fixed info strings. No passphrases, no homebrew KDF.
 **Why.** v1 used `sha256(passphrase)` — GPU-crackable — and its "PBKDF2 fix"
 was dead code with a wrong iteration count. Key material is generated, never
 guessed.
+
+## ADR-016 — Client transport: WinHTTP, not a bundled TLS stack
+*(Superseded by ADR-018.)*
+**Decision.** The Rust client calls WinHTTP (via `windows-sys`) with
+system certificate validation and optional SPKI pin extracted from the
+server certificate handle; DPAPI for state.
+**Why.** Windows-native TLS stack maintained by the OS, no extra crates,
+no OpenSSL, and certificate-pin control at the API level. Fewer moving parts
+in the trust chain.
+
+## ADR-017 — No admin UI in v2
+**Decision.** `ehctl` + documented admin API.
+**Why.** Scope discipline; the API is the contract, a UI can come later
+without touching the server.
+
+## ADR-018 — Client transport: ureq + rustls (supersedes ADR-016)
+**Decision.** The Rust client uses `ureq` 2.12 over `rustls` 0.23 (ring
+provider, no process-wide provider needed) with `webpki-roots`; the optional
+SPKI pin is enforced by a custom `ServerCertVerifier` that runs WebPKI
+verification first and then compares SHA-256 of the leaf's
+SubjectPublicKeyInfo. WinHTTP is not used; `windows-sys` remains for TBS and
+DPAPI only.
+**Why.** WinHTTP through `windows-sys` means manual session/handle juggling
+and pin extraction from an opaque certificate handle; the rustls verifier
+gives the pin check a testable seam
+(`webpki::EndEntityCert::subject_public_key_info`). The whole request path
+stays in memory-safe Rust with a reproducible build. "Use the OS stack and
+hope" was the v1 school of thought; v2 prefers explicit, testable code.

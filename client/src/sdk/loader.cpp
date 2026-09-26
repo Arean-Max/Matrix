@@ -34,6 +34,20 @@ bool UnlinkFilePOSIX(HANDLE hFile) {
     return SetFileInformationByHandle(hFile, EH_FileDispositionInfoEx, &dispInfo, sizeof(dispInfo)) != FALSE;
 }
 
+struct ScopedHandle {
+    HANDLE h = INVALID_HANDLE_VALUE;
+    ScopedHandle(HANDLE handle) : h(handle) {}
+    ~ScopedHandle() {
+        if (h != INVALID_HANDLE_VALUE && h != nullptr) {
+            CloseHandle(h);
+            h = INVALID_HANDLE_VALUE;
+        }
+    }
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+    HANDLE get() const { return h; }
+};
+
 } // namespace
 
 ProtectedModuleLoader::ProtectedModuleLoader() = default;
@@ -90,16 +104,16 @@ bool ProtectedModuleLoader::LoadProtectedLibrary(std::span<const uint8_t> encryp
     if (hFile == INVALID_HANDLE_VALUE) {
         return false;
     }
+    ScopedHandle fileHandle(hFile);
 
     DWORD bytesWritten = 0;
-    WriteFile(hFile, decrypted.data(), static_cast<DWORD>(decrypted.size()), &bytesWritten, nullptr);
+    WriteFile(fileHandle.get(), decrypted.data(), static_cast<DWORD>(decrypted.size()), &bytesWritten, nullptr);
 
     // 4. Load library as standard MEM_IMAGE (EDR-clean)
     loadedModule_ = LoadLibraryW(tempFilePath_.c_str());
 
     // 5. Immediate POSIX Unlink while image section remains mapped in memory
-    UnlinkFilePOSIX(hFile);
-    CloseHandle(hFile);
+    UnlinkFilePOSIX(fileHandle.get());
 
     // Fallback: regular DeleteFileW in case filesystem does not support POSIX semantics
     DeleteFileW(tempFilePath_.c_str());

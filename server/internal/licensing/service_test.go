@@ -1,12 +1,30 @@
 package licensing
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 
 	"event-horizon/server/internal/storage"
+	"event-horizon/shared/crypto"
 	"event-horizon/shared/proto"
 )
+
+func computeTestPoPSignature(priv ed25519.PrivateKey, licenseKey string, seqNum uint64, prevAck, stateAcc []byte, honeypot uint8) []byte {
+	var digestInput []byte
+	digestInput = append(digestInput, []byte(licenseKey)...)
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], seqNum)
+	digestInput = append(digestInput, seqBytes[:]...)
+	digestInput = append(digestInput, prevAck...)
+	digestInput = append(digestInput, stateAcc...)
+	digestInput = append(digestInput, honeypot)
+
+	digest := sha256.Sum256(digestInput)
+	return crypto.SignPayload(priv, digest[:])
+}
 
 func TestLicensingEndToEndLifecycle(t *testing.T) {
 	tempDir := t.TempDir()
@@ -56,9 +74,9 @@ func TestLicensingEndToEndLifecycle(t *testing.T) {
 	}
 
 	// 3. Verify Attestation
-	popPubKey := make([]byte, 32)
-	for i := range popPubKey {
-		popPubKey[i] = 0xAA
+	popPubKey, popPrivKey, err := crypto.GeneratePoPKeyPair()
+	if err != nil {
+		t.Fatalf("failed to generate PoP key pair: %v", err)
 	}
 
 	verifyResp, err := svc.ProcessVerify(&proto.VerifyRequest{
@@ -77,14 +95,18 @@ func TestLicensingEndToEndLifecycle(t *testing.T) {
 		t.Fatal("empty duplicable private blob")
 	}
 
-	// 4. Heartbeat Normal
+	// 4. Heartbeat Normal with valid Ed25519 PoP signature
+	prevAck := make([]byte, 32)
+	stateAcc := make([]byte, 32)
+	sig1 := computeTestPoPSignature(popPrivKey, testKey, 1, prevAck, stateAcc, 0)
+
 	hbResp, err := svc.ProcessHeartbeat(&proto.HeartbeatRequest{
 		LicenseKey:           testKey,
 		SeqNum:               1,
-		PrevHeartbeatAckHash: make([]byte, 32),
-		StateAccumulatorHash: make([]byte, 32),
+		PrevHeartbeatAckHash: prevAck,
+		StateAccumulatorHash: stateAcc,
 		HoneypotTriggered:    0,
-		PoPSignature:         popPubKey,
+		PoPSignature:         sig1,
 		ProtocolVersion:      proto.CurrentProtocolVersion,
 	}, "127.0.0.1")
 	if err != nil {
@@ -95,13 +117,15 @@ func TestLicensingEndToEndLifecycle(t *testing.T) {
 	}
 
 	// 5. Heartbeat with Honeypot Decoy (Mirror Labyrinth, Section 6)
+	sig2 := computeTestPoPSignature(popPrivKey, testKey, 2, hbResp.AckHash, stateAcc, 1)
+
 	hbDecoyResp, err := svc.ProcessHeartbeat(&proto.HeartbeatRequest{
 		LicenseKey:           testKey,
 		SeqNum:               2,
 		PrevHeartbeatAckHash: hbResp.AckHash,
-		StateAccumulatorHash: make([]byte, 32),
+		StateAccumulatorHash: stateAcc,
 		HoneypotTriggered:    1, // Client triggered decoy in debugger!
-		PoPSignature:         popPubKey,
+		PoPSignature:         sig2,
 		ProtocolVersion:      proto.CurrentProtocolVersion,
 	}, "127.0.0.1")
 	if err != nil {

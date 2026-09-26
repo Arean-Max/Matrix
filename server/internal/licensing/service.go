@@ -245,7 +245,7 @@ func (s *LicensingService) ProcessVerify(req *proto.VerifyRequest, clientIP stri
 		LicenseKeyHash:     keyHash,
 		EphemeralPoPPubKey: req.EphemeralPoPPubKey,
 		Status:             proto.StatusSuccess,
-		CurrentSeqNum:      1,
+		CurrentSeqNum:      0,
 		PrevAckHash:        carvedDigest[:],
 		LeaseExpUnix:       leaseExp,
 		HoneypotTriggered:  false,
@@ -302,22 +302,66 @@ func (s *LicensingService) ProcessHeartbeat(req *proto.HeartbeatRequest, clientI
 		return &proto.HeartbeatResponse{Status: lic.Status}, errors.New("license revoked")
 	}
 
-	// 2. DETERMINISTIC CLONE DETECTION (Section 2.6):
-	// If heartbeat is signed by a SUPERSEDED key, both instances are instant-banned!
-	if lic.Status == proto.StatusSupersededSession {
-		lic.Status = proto.StatusCloneDetected
-		_ = s.store.PutLicense(lic)
-		s.store.AddAuditLog(storage.AuditRecord{
-			AuditID:          fmt.Sprintf("clone-%d", time.Now().Unix()),
-			AdminID:          "system",
-			Action:           "BANNED_CLONE_DETECTED",
-			TargetLicenseKey: keyHash,
-			ClientIP:         clientIP,
-			TimestampUnix:    time.Now().Unix(),
-			Details:          "Deterministic clone identified: incoming heartbeat signed by SUPERSEDED PoP key.",
-		})
-		return &proto.HeartbeatResponse{Status: proto.StatusCloneDetected}, ErrCloneDetected
+	// 2. DETERMINISTIC CLONE DETECTION & PoP SIGNATURE VERIFICATION (Section 2.6):
+	// Find active session for this license
+	sess, err := s.store.GetActiveSessionByLicense(keyHash)
+	if err != nil {
+		// No active session. Check if this heartbeat is coming from a superseded clone
+		for _, oldSess := range s.store.GetSupersededSessionsByLicense(keyHash) {
+			if crypto.VerifyPayloadSignature(oldSess.EphemeralPoPPubKey, payloadDigest[:], req.PoPSignature) == nil ||
+				lic.Status == proto.StatusSupersededSession {
+				lic.Status = proto.StatusCloneDetected
+				_ = s.store.PutLicense(lic)
+				s.store.AddAuditLog(storage.AuditRecord{
+					AuditID:          fmt.Sprintf("clone-%d", time.Now().Unix()),
+					AdminID:          "system",
+					Action:           "BANNED_CLONE_DETECTED",
+					TargetLicenseKey: keyHash,
+					ClientIP:         clientIP,
+					TimestampUnix:    time.Now().Unix(),
+					Details:          "Deterministic clone identified: incoming heartbeat signed by SUPERSEDED PoP key.",
+				})
+				return &proto.HeartbeatResponse{Status: proto.StatusCloneDetected}, ErrCloneDetected
+			}
+		}
+		return &proto.HeartbeatResponse{Status: proto.StatusInvalidCredentials}, errors.New("no active session found")
 	}
+
+	// Verify PoP signature against active session's Ephemeral PoP Key
+	sigErr := crypto.VerifyPayloadSignature(sess.EphemeralPoPPubKey, payloadDigest[:], req.PoPSignature)
+	if sigErr != nil {
+		// If active signature failed, check if signed by an older SUPERSEDED session (clone!)
+		for _, oldSess := range s.store.GetSupersededSessionsByLicense(keyHash) {
+			if crypto.VerifyPayloadSignature(oldSess.EphemeralPoPPubKey, payloadDigest[:], req.PoPSignature) == nil {
+				lic.Status = proto.StatusCloneDetected
+				_ = s.store.PutLicense(lic)
+				s.store.AddAuditLog(storage.AuditRecord{
+					AuditID:          fmt.Sprintf("clone-%d", time.Now().Unix()),
+					AdminID:          "system",
+					Action:           "BANNED_CLONE_DETECTED",
+					TargetLicenseKey: keyHash,
+					ClientIP:         clientIP,
+					TimestampUnix:    time.Now().Unix(),
+					Details:          "Parallel execution clone detected: heartbeat valid under SUPERSEDED PoP key.",
+				})
+				return &proto.HeartbeatResponse{Status: proto.StatusCloneDetected}, ErrCloneDetected
+			}
+		}
+
+		// Also check if license record was marked superseded directly
+		if lic.Status == proto.StatusSupersededSession {
+			lic.Status = proto.StatusCloneDetected
+			_ = s.store.PutLicense(lic)
+			return &proto.HeartbeatResponse{Status: proto.StatusCloneDetected}, ErrCloneDetected
+		}
+	}
+
+	// Sequence monotonic verification
+	if req.SeqNum <= sess.CurrentSeqNum && sess.CurrentSeqNum > 0 {
+		return &proto.HeartbeatResponse{Status: proto.StatusInvalidCredentials}, ErrStateForkDetected
+	}
+	sess.CurrentSeqNum = req.SeqNum
+	sess.LastHeartbeatUnix = time.Now().Unix()
 
 	// 3. SERVER-SIDE MIRROR LABYRINTH / DECEPTION MODE (Section 6):
 	// If client reported honeypot_triggered = 1, return 200 OK with mathematically plausible decoy matrices!

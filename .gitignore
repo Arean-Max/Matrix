@@ -17,3 +17,6 @@ bin/
 
 # Go
 *.test
+
+# Rust
+**/target/

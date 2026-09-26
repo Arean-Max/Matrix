@@ -27,7 +27,7 @@ func (h *LicensingHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *LicensingHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	var req proto.ActivateRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.ActivateResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -38,7 +38,7 @@ func (h *LicensingHandler) handleActivate(w http.ResponseWriter, r *http.Request
 
 func (h *LicensingHandler) handleVerifyOOB(w http.ResponseWriter, r *http.Request) {
 	var req proto.VerifyOOBRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.VerifyOOBResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -49,7 +49,7 @@ func (h *LicensingHandler) handleVerifyOOB(w http.ResponseWriter, r *http.Reques
 
 func (h *LicensingHandler) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	var req proto.ChallengeRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.ChallengeResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -65,7 +65,7 @@ func (h *LicensingHandler) handleChallenge(w http.ResponseWriter, r *http.Reques
 
 func (h *LicensingHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req proto.VerifyRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.VerifyResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -80,7 +80,7 @@ func (h *LicensingHandler) handleVerify(w http.ResponseWriter, r *http.Request) 
 
 func (h *LicensingHandler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req proto.HeartbeatRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.HeartbeatResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -95,7 +95,7 @@ func (h *LicensingHandler) handleHeartbeat(w http.ResponseWriter, r *http.Reques
 
 func (h *LicensingHandler) handleResetHWID(w http.ResponseWriter, r *http.Request) {
 	var req proto.ResetHWIDRequest
-	if err := decodeJSON(r.Body, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, proto.ResetHWIDResponse{Status: proto.StatusInvalidCredentials})
 		return
 	}
@@ -108,10 +108,12 @@ func (h *LicensingHandler) handleResetHWID(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func decodeJSON(r io.Reader, v any) error {
-	defer io.Copy(io.Discard, r)
-	return json.NewDecoder(r).Decode(v)
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB payload limit
+	defer io.Copy(io.Discard, r.Body)
+	return json.NewDecoder(r.Body).Decode(v)
 }
+
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

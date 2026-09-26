@@ -55,11 +55,11 @@ func (a *AdminService) authenticateAdmin(next http.HandlerFunc) http.HandlerFunc
 		} else {
 			// Fallback: WebAuthn session header check
 			authHeader := r.Header.Get("X-Admin-Session")
-			if authHeader == "" {
-				http.Error(w, "Unauthorized: mTLS client certificate or WebAuthn session required", http.StatusUnauthorized)
+			if len(authHeader) < 32 {
+				http.Error(w, "Unauthorized: mTLS client certificate or active 32+ character admin session required", http.StatusUnauthorized)
 				return
 			}
-			adminID = "webauthn-" + authHeader[:8]
+			adminID = "webauthn-" + authHeader[:16]
 		}
 
 		// Inject AdminID into request context

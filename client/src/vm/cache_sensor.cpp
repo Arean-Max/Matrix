@@ -54,9 +54,35 @@ uint8_t CacheResidencySensor::ProbeEvictionBit() {
     return (evictionVotes >= 2) ? 1 : 0;
 }
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 uint64_t CacheResidencySensor::SampleCodeBytes(const void* function_ptr, size_t length) {
     if (!function_ptr || length == 0) {
         return 0;
+    }
+
+    // Verify memory page permissions to prevent memory access violations
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(function_ptr, &mbi, sizeof(mbi)) == 0) {
+        return 0;
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return 0;
+    }
+
+    DWORD protect = mbi.Protect & ~(PAGE_GUARD | PAGE_NOCACHE);
+    if (protect != PAGE_EXECUTE_READ && protect != PAGE_EXECUTE_READWRITE &&
+        protect != PAGE_READONLY && protect != PAGE_READWRITE) {
+        return 0;
+    }
+
+    // Clamp length to remaining committed bytes in this page
+    uintptr_t funcAddr = reinterpret_cast<uintptr_t>(function_ptr);
+    uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    if (funcAddr + length > regionEnd) {
+        length = regionEnd - funcAddr;
     }
 
     const auto* code = static_cast<const uint8_t*>(function_ptr);

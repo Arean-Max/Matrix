@@ -3,6 +3,8 @@ package server_test
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +13,20 @@ import (
 	"event-horizon/shared/crypto"
 	"event-horizon/shared/proto"
 )
+
+func computeTestPoPSignature(priv ed25519.PrivateKey, licenseKey string, seqNum uint64, prevAck, stateAcc []byte, honeypot uint8) []byte {
+	var digestInput []byte
+	digestInput = append(digestInput, []byte(licenseKey)...)
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], seqNum)
+	digestInput = append(digestInput, seqBytes[:]...)
+	digestInput = append(digestInput, prevAck...)
+	digestInput = append(digestInput, stateAcc...)
+	digestInput = append(digestInput, honeypot)
+
+	digest := sha256.Sum256(digestInput)
+	return crypto.SignPayload(priv, digest[:])
+}
 
 func TestEndToEndAttestationCloneDetectionAndDeception(t *testing.T) {
 	tempDir := t.TempDir()
@@ -88,13 +104,16 @@ func TestEndToEndAttestationCloneDetectionAndDeception(t *testing.T) {
 	}
 
 	// 6. Normal Heartbeat (Instance 1)
+	stateAcc := make([]byte, 32)
+	sig1 := computeTestPoPSignature(popPriv1, licenseKey, 1, verifyResp.KeyPackage.TargetPolicyHash, stateAcc, 0)
+
 	hbResp1, err := licService.ProcessHeartbeat(&proto.HeartbeatRequest{
 		LicenseKey:           licenseKey,
 		SeqNum:               1,
 		PrevHeartbeatAckHash: verifyResp.KeyPackage.TargetPolicyHash,
-		StateAccumulatorHash: make([]byte, 32),
+		StateAccumulatorHash: stateAcc,
 		HoneypotTriggered:    0,
-		PoPSignature:         popPub1,
+		PoPSignature:         sig1,
 		ProtocolVersion:      proto.CurrentProtocolVersion,
 	}, "192.168.1.100")
 	if err != nil {
@@ -105,13 +124,15 @@ func TestEndToEndAttestationCloneDetectionAndDeception(t *testing.T) {
 	}
 
 	// 7. Debugger attached to Instance 1 -> Honeypot Triggered -> Mirror Labyrinth
+	sig2 := computeTestPoPSignature(popPriv1, licenseKey, 2, hbResp1.AckHash, stateAcc, 1)
+
 	hbDecoyResp, err := licService.ProcessHeartbeat(&proto.HeartbeatRequest{
 		LicenseKey:           licenseKey,
 		SeqNum:               2,
 		PrevHeartbeatAckHash: hbResp1.AckHash,
-		StateAccumulatorHash: make([]byte, 32),
+		StateAccumulatorHash: stateAcc,
 		HoneypotTriggered:    1, // Client detected 0xCC breakpoint / cache eviction!
-		PoPSignature:         popPub1,
+		PoPSignature:         sig2,
 		ProtocolVersion:      proto.CurrentProtocolVersion,
 	}, "192.168.1.100")
 	if err != nil {
@@ -140,18 +161,16 @@ func TestEndToEndAttestationCloneDetectionAndDeception(t *testing.T) {
 	}
 
 	// At this point, Instance 1's PoP key has been atomically transitioned to SUPERSEDED.
-	// Now, Instance 1 (which did not terminate) sends another heartbeat with the SUPERSEDED key!
-	licRecord, _ = store.GetLicense(keyHash)
-	licRecord.Status = proto.StatusSupersededSession
-	_ = store.PutLicense(licRecord)
+	// Now, Instance 1 (which did not terminate) sends another heartbeat with its SUPERSEDED key!
+	sig3 := computeTestPoPSignature(popPriv1, licenseKey, 3, hbDecoyResp.AckHash, stateAcc, 0)
 
 	hbCloneResp, err := licService.ProcessHeartbeat(&proto.HeartbeatRequest{
 		LicenseKey:           licenseKey,
 		SeqNum:               3,
 		PrevHeartbeatAckHash: hbDecoyResp.AckHash,
-		StateAccumulatorHash: make([]byte, 32),
+		StateAccumulatorHash: stateAcc,
 		HoneypotTriggered:    0,
-		PoPSignature:         popPriv1,
+		PoPSignature:         sig3,
 		ProtocolVersion:      proto.CurrentProtocolVersion,
 	}, "192.168.1.100")
 
@@ -181,6 +200,4 @@ func TestEndToEndAttestationCloneDetectionAndDeception(t *testing.T) {
 	if err != storage.ErrQuotaExceeded {
 		t.Fatalf("expected ErrQuotaExceeded, got: %v", err)
 	}
-
-	_ = crypto.ConstantTimeCompare([]byte("test"), []byte("test"))
 }

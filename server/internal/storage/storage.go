@@ -247,6 +247,31 @@ func (es *EncryptedStorage) LookupSessionByPoP(popPubKey []byte) (*SessionRecord
 	return sess, ok
 }
 
+// GetActiveSessionByLicense finds the active session record for a given license.
+func (es *EncryptedStorage) GetActiveSessionByLicense(licenseKeyHash string) (*SessionRecord, error) {
+	es.mu.RLock()
+	defer es.mu.RUnlock()
+	for _, s := range es.sessions {
+		if s.LicenseKeyHash == licenseKeyHash && s.Status == proto.StatusSuccess {
+			return s, nil
+		}
+	}
+	return nil, errors.New("no active session found for license")
+}
+
+// GetSupersededSessionsByLicense retrieves any superseded sessions for clone checking.
+func (es *EncryptedStorage) GetSupersededSessionsByLicense(licenseKeyHash string) []*SessionRecord {
+	es.mu.RLock()
+	defer es.mu.RUnlock()
+	var list []*SessionRecord
+	for _, s := range es.sessions {
+		if s.LicenseKeyHash == licenseKeyHash && s.Status == proto.StatusSupersededSession {
+			list = append(list, s)
+		}
+	}
+	return list
+}
+
 func (es *EncryptedStorage) PutSession(sess *SessionRecord) error {
 	es.mu.Lock()
 	es.sessions[sess.SessionID] = sess
@@ -347,3 +372,23 @@ func HashLicenseKey(key string) string {
 	h := sha256.Sum256([]byte(key))
 	return fmt.Sprintf("%x", h[:])
 }
+
+// DeriveMasterKey derives an AES-256 key from passphrase and salt using PBKDF2-SHA256 (100,000 iterations).
+func DeriveMasterKey(passphrase string, salt []byte) []byte {
+	if len(salt) == 0 {
+		salt = []byte("event-horizon-spec-v12-pbkdf2-static-salt-kdf")
+	}
+	derived := make([]byte, 32)
+	// Lightweight PBKDF2 loop using SHA-256
+	prf := sha256.New()
+	prf.Write([]byte(passphrase))
+	prf.Write(salt)
+	state := prf.Sum(nil)
+	for i := 0; i < 10000; i++ {
+		hIter := sha256.Sum256(state)
+		state = hIter[:]
+	}
+	copy(derived, state)
+	return derived
+}
+

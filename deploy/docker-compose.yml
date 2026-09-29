@@ -1,0 +1,29 @@
+services:
+  eh-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: eventhorizon/server:2.0.0
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - eh-data:/data
+
+      - ./config/server.yaml:/etc/eh/server.yaml:ro
+      - ./tls:/etc/eh/tls:ro
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/eh-server", "-health-check", "-config", "/etc/eh/server.yaml"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+volumes:
+  eh-data:

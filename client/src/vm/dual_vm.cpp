@@ -233,8 +233,10 @@ private:
     uint64_t accumulator_ = 0x1337C0DE84920482ULL;
 };
 
+#ifndef USE_RUST_CORE
 std::unique_ptr<DualEntangledVM> DualEntangledVM::Create() {
     return std::make_unique<DualEntangledVMImpl>();
 }
+#endif
 
 } // namespace event_horizon::vm

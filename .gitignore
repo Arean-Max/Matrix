@@ -1,22 +1,35 @@
-# Build directories
-build/
-bin/
+/target/
+**/target/
+/dist/
+/out/
 *.exe
+*.dll
 *.lib
 *.pdb
 *.obj
 *.o
 *.a
 *.so
-*.dll
+*.rlib
+*.rmeta
 
-# IDE / Editor
 .vscode/
 .idea/
 *.swp
 
-# Go
 *.test
 
-# Rust
-**/target/
+*.log
+
+/data/
+/certs/
+*.pem
+*.key
+*.token
+*.provision.json
+*.ehpkg
+
+Thumbs.db
+Desktop.ini
+
+build/

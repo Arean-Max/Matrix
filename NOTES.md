@@ -1,0 +1,9 @@
+- v1 failed because half of it could not be tested. keep v2 boring.
+- heartbeat: ed25519 proof over a chained nonce, ack is an hmac. write it down before coding.
+- sqlite wal + busy_timeout. one writer is fine at this scale.
+- oob: 8 digits, store the hmac only. lock ladder lives on the license row.
+- tpm activation is blocked for normal users on windows. test elevated; the lower trust tier is the fallback.
+- vm: 32-byte words, hmac takes key + message, pops message first.
+- TODO: check ureq + rustls + spki pinning before writing http.rs.
+- TODO: distroless image, healthcheck without a shell.
+- backup must not include the master key. say that loudly in the docs.

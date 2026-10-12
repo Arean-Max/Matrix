@@ -198,3 +198,172 @@ gives the pin check a testable seam
 (`webpki::EndEntityCert::subject_public_key_info`). The whole request path
 stays in memory-safe Rust with a reproducible build. "Use the OS stack and
 hope" was the v1 school of thought; v2 prefers explicit, testable code.
+
+## ADR-019 — TPM identity: endorsement-hierarchy primaries as EK/AK stand-ins
+**Decision.** The client creates two primaries in the endorsement hierarchy:
+an RSA-2048 storage primary as the EK stand-in (empty auth policy, so the
+password session works) and an RSA-2048 restricted signing primary as the AK.
+The server keeps treating `ek_pub` as an opaque TPMT_PUBLIC; the wire protocol
+does not change.
+**Why.** No Create/Load marshalling for persistent child keys, and both
+objects are deterministic per TPM: `ek_hash` survives TPM clear, so enrolled
+devices keep matching. The owner hierarchy was rejected (it dies on TPM
+clear). The cost is honest and bounded: `ek_pub` carries no EK certificate,
+so the authenticity of the EK is whatever first-seen enrollment grants (TOFU)
+— see PROTOCOL §3.3 and ADR-008; DRM-grade EK certificate validation is out
+of scope.
+
+## ADR-020 — Spec v12 triage: adopted hardening vs rejected anti-reverse stack
+
+**Context.** A vendor-side proposal ("Spec v12") asked for a C++20 Windows
+client wrapped in eight anti-reverse layers (dual cellular-automata VM,
+non-associative quasigroup MBA, white-box tables, `.pdata` exception
+steganography, L1d cache-eviction sensing, chaff execution graphs, symbolic
+path explosion, server-fed decoy constants), plus a list of protocol
+hardening items. This ADR records what was adopted and what was rejected.
+
+**Adopted (verifiable, testable, no new trust assumptions).**
+- `X-EH-Protocol` negotiation with a single supported version, rejected
+  before body decoding (`protocol_unsupported`, no fallback).
+- HWID reset accounting: one reset per binding or explicit reset that
+  releases a trusted device, on every license size, 30-day cooldown, three
+  lifetime resets, atomic check-increment-release in SQLite, suspension on
+  exhaustion, admin `clear-resets`. A client reset names one fingerprint and
+  releases only that device. OOB is still required for every re-bind.
+- AK attribute policy (`restricted`, `sign`, `fixedTPM`, `fixedParent`,
+  `sensitiveDataOrigin`) — already enforced by `internal/attestation`; for
+  the primary-key design (ADR-019) this is the meaningful subset of the
+  spec's CertifyCreation requirement.
+- Deterministic clone detection with supersede grace and optional suspension
+  — already implemented in `internal/licensing` (`session.clone_suspect`,
+  `clone.action`).
+
+**Rejected.**
+- **C++20 client rewrite.** ADR-001 removed the v1 C++ runtime for memory
+  safety and undefined behaviour; the client is the component that parses
+  attacker-controlled TPM and package bytes. Rewriting it in C++ trades the
+  project's strongest security property for no measurable benefit.
+- **Eight-layer anti-reverse stack.** It is unverifiable by construction,
+  and several layers contradict the project's EDR-compatibility goal:
+  custom `.pdata` unwind handlers and non-canonical pointer faults are
+  indistinguishable from malware heuristics; cache-latency thresholds fire
+  under ordinary scheduler pressure; chaff execution silently corrupts
+  customer output and makes support impossible; decoy constants require the
+  server to keep a second, lying protocol. None of this changes the licence
+  gating threat model: a determined owner can still dump a licensed process.
+- **Client-side honeypot telemetry.** Hidden `honeypot_triggered` flags are
+  attacker-controlled input and turn the admin panel into a disinformation
+  channel. The server only accepts typed, server-verifiable signals today.
+- **PoW on `/activate`.** Rate limits and the constant-time response floor
+  already bound enumeration; PoW shifts cost to legitimate users and is
+  trivially outsourced to GPUs. Not implemented; revisit only with evidence
+  of a real enumeration campaign.
+- **TCG event-log parsing, EK certificate chains (STRICT_ENTERPRISE),
+  CRL/short-lived admin certificates, OS-keyring DB keys, signed lease
+  tokens with `kid` rotation.** Valuable, but each is a protocol/ops project
+  of its own. They are tracked as roadmap items in the audit report; the
+  current honest boundary (TOFU, field-level encryption) is documented in
+  `THREAT_MODEL.md` A6 and `PROTOCOL.md` §3.4.
+
+**Consequences.** The attack surface stays small and reviewable; every new
+control is covered by tests and audit records. The project does not claim
+"unbreakable" client code and continues to describe itself as license gating
+with economic friction, not DRM.
+
+## ADR-021 — Isolated Rust verifier for untrusted TPM data (eh-trustd)
+
+**Decision.** TPM public-area parsing, `TPMS_ATTEST` / `TPMT_SIGNATURE`
+parsing and quote signature verification live in `rust/eh-trustd`, a stateless
+binary that speaks one JSON request/response per line over stdin/stdout.
+`eh-server` spawns it when `attestation.trustd_path` is set (the Docker image
+sets it by default) and otherwise uses the existing Go implementation
+(`attestation.Embedded`). Both satisfy `attestation.Verifier`; a differential
+test runs identical fixtures through both and compares results, including
+every truncation step and the rejection cases. That sweep found a go-tpm
+leniency: a public area cut just before its unique field parsed as a key with
+an empty modulus. `CheckAK` now re-marshals the parsed key and requires the
+original bytes to match, so both backends reject non-canonical public areas.
+
+**Why.** These bytes are the only attacker-controlled parser input on the
+server that is not business logic. The child has no sockets, no database
+handle, no keys and an empty environment (so it cannot inherit
+`EH_MASTER_KEY`); a parser or panic bug cannot take down the control plane or
+read secrets passed to the parent. It runs as the same service user, so this
+is isolation of the untrusted path, not a kernel sandbox. A crash, timeout or
+malformed response fails the request closed and the child respawns. It is also
+faster and leaner than the reflective go-tpm path. On an i5-12400F (Go 1.27,
+rustc 1.99; median of five 2-second runs on a quiet host): `CheckAK` is 31µs
+/ 25 allocations over the pipe against 75µs / ~1.2k allocations embedded; an
+RSA quote is 65µs against 139µs, and an ECDSA quote 98µs against 167µs, at
+3.4–4.9KB against 17–18KB per operation. Absolute numbers move with host load;
+a run with the desktop at 82% CPU roughly doubled both sides, while the
+ordering and the allocation gap held.
+
+**Limits, tested and documented.** RSA ≥2048 with PKCS#1/PSS and SHA-256/384;
+ECDSA P-256/SHA-256 and P-384/SHA-384 with matching curve/hash pairs. PSS
+salt length must equal the digest size, and non-standard salts are rejected by
+both verifiers (TPM 2.0 behaviour). `MakeCredential` (credential activation,
+which parses the client's EK public area) stays in Go until its path is split
+too.
+Embedded mode remains fully supported; the daemon is an operator choice, not a
+hard dependency.
+
+## ADR-022 — No C++ component without a measured CPU-bound bottleneck
+
+**Decision.** The tree keeps zero C++ (consistent with ADR-001 and ADR-020).
+This ADR records the measurement that closes the recurring "add C++ for speed
+and memory control" proposal.
+
+**Measurement (i5-12400F; Go 1.27, rustc 1.99; median of five 2-second
+`go test -bench` runs on a quiet host; a loaded host scaled both sides by
+~1.5–2× without changing the ordering).** Full quote verification including
+all TPM parsing: Go 139µs (RSA) and 167µs (ECDSA), 17–18KB and 1000+
+allocations; Rust 65µs (RSA) and 98µs (ECDSA) end-to-end over the pipe, which
+includes IPC and JSON, at 3.4–4.9KB and 45 allocations. `CheckAK`: 75µs Go vs
+31µs Rust. A single activation HTTP request spends its budget in TLS, SQLite
+and JSON — milliseconds, not microseconds — so attestation is a low
+single-digit percentage of request time. There is no measured kernel a C++
+rewrite could accelerate, and every candidate input is attacker-controlled,
+which is exactly where memory-unsafe parsers are the wrong tool.
+
+**Entry criterion for revisiting.** A profile showing a CPU-bound loop above
+20% of end-to-end request time, plus a benchmark committed next to it, plus a
+C-ABI-free integration (no cgo), plus ASan/UBSan and differential fuzzing
+against the existing implementation. Absent that, C++ stays out: language
+choice follows the data, not preference.
+
+## ADR-023 — Modular monolith, request correlation, no network microservices
+
+**Context.** The server had grown into a few large files: `store.go` mixed
+every aggregate, `licensing/service.go` mixed every workflow, and the API
+transport lived in one file. Navigation was poor and a 500 log did not carry a
+stable identifier an operator could quote. The proposal on the table was to
+split the deployment into microservices so that one failed service would not
+stop the others.
+
+**Decision.** Keep one deployable process and split it internally by feature.
+Each package has one reason to change; large files were replaced with
+aggregate/workflow/transport files (see `docs/ARCHITECTURE.md` §4–5). Add
+`internal/platform/reqid` and make every JSON error carry `request_id`.
+`GET /api/v1/ready` reports database and attestation-backend status.
+
+**Why not microservices.** The server owns one SQLite database and a set of
+transactional invariants (bind device + consume OOB, start session + supersede
+older sessions, revoke license + sessions). Splitting those into network
+services would replace in-process transactions with sagas, add service
+discovery, auth between services, retries, version skew and new partial-failure
+modes. A single-node self-hosted product would become harder to install and
+debug, and "one service is down" would become the normal case rather than the
+exception. The existing Rust `eh-trustd` is the one boundary that earns process
+isolation: it parses attacker-controlled TPM data, has no keys or DB access,
+and failing closed is the correct behavior. We will extract another service
+only when an independent scaling or security boundary is measured, not because
+the tree is large.
+
+**Consequences.** One binary, one backup, one config file. Failures are
+contained by package and by component: a database failure is surfaced
+(readiness 503, data requests 500), trustd failure affects only
+quote/activation, webhook failure leaves the OOB code available for manual
+retrieval, and a janitor panic is logged without killing the process.
+Compile-time package dependencies make accidental coupling visible. A future
+split has a stable interface and a clear data owner.

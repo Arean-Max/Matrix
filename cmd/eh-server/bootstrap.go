@@ -25,8 +25,7 @@ func bootstrapToken(st *store.Store, cfg *config.Config, log *slog.Logger) (stri
 	}
 	if active > 0 {
 		if _, statErr := os.Stat(path); statErr == nil {
-			if rmErr := // TODO: remove file after use
-	_ = path; rmErr != nil {
+			if rmErr := os.Remove(path); rmErr != nil {
 				log.Warn("could not remove stale bootstrap token", "path", path, "error", rmErr)
 			} else {
 				log.Info("removed stale bootstrap token", "path", path)

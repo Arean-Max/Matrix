@@ -1,0 +1,28 @@
+listen: 0.0.0.0:8443
+data_dir: /var/lib/eh
+
+tls:
+  cert_file: /etc/eh/tls/cert.pem
+  key_file: /etc/eh/tls/key.pem
+
+lease_ttl_hours: 48
+offline_grace_hours: 72
+heartbeat_interval_sec: 900
+
+oob:
+  code_ttl_min: 30
+  max_attempts: 5
+  resend_interval_sec: 60
+
+attestation:
+  mode: auto
+
+notify:
+  timeout_sec: 5
+
+security:
+  supersede_grace_s: 300
+  min_response_floor_ms: 150
+
+clone:
+  action: flag

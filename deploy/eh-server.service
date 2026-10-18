@@ -1,0 +1,37 @@
+[Unit]
+Description=Event Horizon license server
+Documentation=file:/usr/share/doc/eventhorizon/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eh
+Group=eh
+WorkingDirectory=/var/lib/eh
+ExecStart=/usr/local/bin/eh-server -config /etc/eh/server.yaml
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/eh
+ReadOnlyPaths=/etc/eh /etc/ssl/certs
+
+[Install]
+WantedBy=multi-user.target

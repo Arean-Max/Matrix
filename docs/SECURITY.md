@@ -87,6 +87,12 @@ construction gets `/v2`, never a silent edit.
       will land `tpm-quote` under `auto`; `required` rejects them. Without
       a usable quote they land `unattested`.
 - [ ] `clone.action: suspend` for high-value licenses.
+- [ ] Keep `reset_hwid.enabled: true` for single-device licenses. Every
+      displacement of a trusted device costs one reset; exhaustion suspends
+      the license. Clear counters only after verifying the hardware change
+      (`ehctl license clear-resets`), then resume.
+- [ ] Protocol version is enforced (`X-EH-Protocol`); there is no downgrade
+      path. Upgrade clients instead of widening the accepted range.
 - [ ] Review `ehctl audits` after onboarding waves; alert on
       `oob.fail` ladders and `session.clone_suspect`.
 - [ ] Keep `security.min_response_floor_ms` ≥ 100 in production.

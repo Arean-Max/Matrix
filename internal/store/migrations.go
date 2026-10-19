@@ -121,6 +121,13 @@ var migrations = []struct {
 			`CREATE UNIQUE INDEX admin_tokens_lookup ON admin_tokens(lookup) WHERE lookup <> ''`,
 		},
 	},
+	{
+		version: 3,
+		stmts: []string{
+			`ALTER TABLE licenses ADD COLUMN reset_count INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE licenses ADD COLUMN last_reset_at INTEGER NOT NULL DEFAULT 0`,
+		},
+	},
 }
 
 func migrate(db *sql.DB) error {

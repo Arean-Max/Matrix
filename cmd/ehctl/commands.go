@@ -89,7 +89,7 @@ func cmdStatus(args []string) error {
 
 func cmdLicense(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ehctl license create|list|show|suspend|resume|revoke|oob|unlock ...")
+		return errors.New("usage: ehctl license create|list|show|suspend|resume|revoke|oob|unlock|clear-resets ...")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -109,6 +109,8 @@ func cmdLicense(args []string) error {
 		return cmdLicenseOOB(rest)
 	case "unlock":
 		return cmdLicenseUnlock(rest)
+	case "clear-resets":
+		return cmdLicenseClearResets(rest)
 	default:
 		return fmt.Errorf("unknown license subcommand %q", sub)
 	}
@@ -203,6 +205,11 @@ func cmdLicenseShow(args []string) error {
 		fmt.Printf("note:      %s\n", v.Note)
 		fmt.Printf("channel:   %s\n", v.Channel)
 		fmt.Printf("devices:   %d trusted, %d active sessions\n", v.Devices, v.ActiveSessions)
+		if v.LastResetAt != 0 {
+			fmt.Printf("resets:    %d (last %s)\n", v.ResetCount, ts(v.LastResetAt))
+		} else {
+			fmt.Printf("resets:    %d\n", v.ResetCount)
+		}
 		fmt.Printf("created:   %s\n", ts(v.CreatedAt))
 		fmt.Printf("updated:   %s\n", ts(v.UpdatedAt))
 	})
@@ -284,6 +291,27 @@ func cmdLicenseUnlock(args []string) error {
 	}
 	fmt.Printf("license %s: OOB attempt ladder cleared\n", fs.Arg(0))
 	return nil
+}
+
+func cmdLicenseClearResets(args []string) error {
+	fs, g := commonFS("ehctl license clear-resets")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: ehctl license clear-resets ID")
+	}
+	c, err := newClient(g, true)
+	if err != nil {
+		return err
+	}
+	var v wire.LicenseView
+	if err := c.do(http.MethodPost, licenseKeyPath(fs.Arg(0))+"/resets/clear", nil, &v); err != nil {
+		return err
+	}
+	return printOrJSON(g, v, func() {
+		fmt.Printf("license %s: reset counters cleared\n", v.ID)
+	})
 }
 
 func cmdDevice(args []string) error {

@@ -27,6 +27,7 @@ type Config struct {
 	Notify               Notify      `yaml:"notify"`
 	Security             Security    `yaml:"security"`
 	Clone                Clone       `yaml:"clone"`
+	Reset                ResetHWID   `yaml:"reset_hwid"`
 }
 
 type TLS struct {
@@ -63,6 +64,12 @@ type Clone struct {
 	Action string `yaml:"action"`
 }
 
+type ResetHWID struct {
+	Enabled       bool `yaml:"enabled"`
+	CooldownDays  int  `yaml:"cooldown_days"`
+	LifetimeLimit int  `yaml:"lifetime_limit"`
+}
+
 func Default() *Config {
 	return &Config{
 		Listen:               "127.0.0.1:8443",
@@ -82,6 +89,7 @@ func Default() *Config {
 			MinResponseFloorMS: 150,
 		},
 		Clone: Clone{Action: "flag"},
+		Reset: ResetHWID{Enabled: true, CooldownDays: 30, LifetimeLimit: 3},
 	}
 }
 
@@ -160,6 +168,12 @@ func (c *Config) Validate() error {
 	case "flag", "suspend":
 	default:
 		return fmt.Errorf("clone.action %q: want flag or suspend", c.Clone.Action)
+	}
+	if c.Reset.CooldownDays < 0 || c.Reset.LifetimeLimit < 0 {
+		return errors.New("reset_hwid cooldown and lifetime must be non-negative")
+	}
+	if c.Reset.Enabled && (c.Reset.CooldownDays < 1 || c.Reset.LifetimeLimit < 1) {
+		return errors.New("reset_hwid.cooldown_days and reset_hwid.lifetime_limit must be positive when reset_hwid.enabled")
 	}
 	if c.LeaseTTLHours <= 0 || c.OfflineGraceHours <= 0 || c.HeartbeatIntervalSec <= 0 {
 		return errors.New("lease_ttl_hours, offline_grace_hours and heartbeat_interval_sec must be positive")

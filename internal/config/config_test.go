@@ -84,6 +84,12 @@ func TestValidationOfModes(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("bogus clone action accepted")
 	}
+	cfg = Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.Reset.CooldownDays = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("enabled reset policy without cooldown accepted")
+	}
 }
 
 func TestMasterKeyFromEnv(t *testing.T) {

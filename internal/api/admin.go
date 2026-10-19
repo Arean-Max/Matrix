@@ -56,6 +56,15 @@ func (s *Server) adminRevokeLicense(w http.ResponseWriter, r *http.Request, acto
 	s.changeLicenseStatus(w, r, actor, store.LicenseRevoked)
 }
 
+func (s *Server) adminClearResets(w http.ResponseWriter, r *http.Request, actor string) {
+	view, err := s.svc.ClearResets(r.PathValue("id"), actor, s.now().Unix())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (s *Server) changeLicenseStatus(w http.ResponseWriter, r *http.Request, actor, status string) {
 	var req wire.ReasonRequest
 	if err := decodeOptional(w, r, &req); err != nil {

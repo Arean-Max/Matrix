@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 pub const STATUS_READY: &str = "ready";
 pub const STATUS_OOB_REQUIRED: &str = "oob_required";
 pub const STATUS_ACTIVE: &str = "active";
+pub const PROTOCOL_HEADER: &str = "X-EH-Protocol";
+pub const PROTOCOL_VERSION: &str = "1";
 pub const TRUST_TPM_ATTESTED: &str = "tpm-attested";
 pub const TRUST_TPM_QUOTE: &str = "tpm-quote";
 pub const TRUST_EK_BOUND: &str = "ek-bound";

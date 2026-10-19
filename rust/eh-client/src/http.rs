@@ -64,6 +64,7 @@ impl Http {
             .agent
             .post(&url)
             .set("Content-Type", "application/json")
+            .set(wire::PROTOCOL_HEADER, wire::PROTOCOL_VERSION)
             .send_bytes(&payload)
         {
             Ok(r) => r,

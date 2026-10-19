@@ -21,6 +21,10 @@ implemented against it. When code and document disagree, one of them is a bug.
   boundary. This rule applies to `ak_pub`, `attest`, `signature`,
   `enc_secret`, `id_object`.
 - Client API root: `/api/v1`. Admin API root: `/admin/v1`.
+- Every client API request except `GET /api/v1/health` MUST carry
+  `X-EH-Protocol: 1`. Missing, non-integer or out-of-range values are
+  rejected with `protocol_unsupported` before the body is decoded. There is
+  no fallback and no legacy mode; version 1 is both the minimum and maximum.
 
 ## 2. Identifiers
 
@@ -70,13 +74,14 @@ Error body (all non-2xx):
 {"error": {"code": "invalid_license", "message": "human-readable text"}}
 ```
 
-Error codes: `invalid_request` (400), `invalid_license` (403),
-`license_unavailable` (403), `invalid_code` (403), `code_locked` (429, body
-carries `retry_after_s`), `oob_expired` (410), `oob_required` (409),
-`invalid_nonce` (409), `attestation_failed` (403), `activation_failed` (403),
-`bad_signature` (403), `unknown_session` (403), `lease_expired` (403),
-`session_revoked` (403), `ack_chain_broken` (409), `rate_limited` (429, body
-carries `retry_after_s`), `internal` (500).
+Error codes: `invalid_request` (400), `protocol_unsupported` (400),
+`invalid_license` (403), `license_unavailable` (403), `invalid_code` (403),
+`code_locked` (429, body carries `retry_after_s`), `oob_expired` (410),
+`oob_required` (409), `invalid_nonce` (409), `attestation_failed` (403),
+`activation_failed` (403), `bad_signature` (403), `unknown_session` (403),
+`lease_expired` (403), `session_revoked` (403), `ack_chain_broken` (409),
+`reset_cooldown` (429, body carries `retry_after_s`), `reset_quota` (403),
+`rate_limited` (429, body carries `retry_after_s`), `internal` (500).
 
 The client treats `unknown_session`, `lease_expired`, `session_revoked` and
 `ack_chain_broken` as session loss: it drops the local session and tries one
@@ -321,6 +326,39 @@ Server rules:
 - `now > lease_exp` → `lease_expired` (checked after the supersede rule).
 
 Limits: 1/10 s per session, 60/min per IP.
+
+### 3.6 POST /api/v1/reset-hwid
+
+Releases every trusted device of a license so that the machine (or its
+replacement) must complete activation and a fresh OOB code again:
+
+```json
+{"license_key": "...", "fingerprint": "hex64-or-omitted"}
+```
+
+Response 200: `{"status": "released", "devices_released": 1}`. If no device is
+trusted the call is a no-op and does not consume quota.
+
+Policy for single-device licenses (`max_devices == 1`; multi-device licenses
+are fleet-managed and are not quota-limited):
+
+- A binding that displaces a trusted device counts as a reset, as does an
+  explicit call that releases at least one trusted device. Re-binding the same
+  fingerprint, or binding while a free slot exists, does not count.
+- `reset_hwid.cooldown_days` (default 30) must elapse between resets:
+  `reset_cooldown` with `retry_after_s`.
+- `reset_hwid.lifetime_limit` (default 3) automatic resets: the next attempt
+  returns `reset_quota` and suspends the license. An operator clears the
+  counters with `ehctl license clear-resets <id>` and resumes it.
+- The quota check, the counter increment and the device release run in one
+  SQLite transaction, so parallel requests cannot exceed the limit.
+- The endpoint never bypasses OOB: it only unbinds devices. The following
+  `/activate` issues a code exactly like a first activation.
+- `reset_hwid.enabled: false` disables quota accounting; devices are still
+  released and the operation is audited.
+
+Limits: 5/min per IP, 3/min per license. Every reset is audited as
+`hwid.reset`; a quota hit adds `hwid.reset_quota` and suspends the license.
 
 ## 4. Package key wrapping
 

@@ -14,6 +14,17 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+var (
+	ErrResetCooldown = errors.New("hwid reset cooldown active")
+	ErrResetQuota    = errors.New("hwid reset quota exhausted")
+)
+
+type ResetPolicy struct {
+	Enforce     bool
+	CooldownSec int64
+	Lifetime    int
+}
+
 const (
 	LicenseActive    = "active"
 	LicenseSuspended = "suspended"
@@ -141,6 +152,8 @@ type License struct {
 	CreatedAt     int64
 	UpdatedAt     int64
 	SuspendReason string
+	ResetCount    int
+	LastResetAt   int64
 }
 
 func (s *Store) CreateLicense(l *License) error {
@@ -155,7 +168,7 @@ func (s *Store) CreateLicense(l *License) error {
 	return err
 }
 
-const licenseCols = `id, key_hmac, status, customer, note, channel_enc, max_devices, created_at, updated_at, suspend_reason`
+const licenseCols = `id, key_hmac, status, customer, note, channel_enc, max_devices, created_at, updated_at, suspend_reason, reset_count, last_reset_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -163,7 +176,7 @@ func (s *Store) scanLicense(r rowScanner) (*License, error) {
 	var l License
 	var channel []byte
 	err := r.Scan(&l.ID, &l.KeyHMAC, &l.Status, &l.Customer, &l.Note, &channel,
-		&l.MaxDevices, &l.CreatedAt, &l.UpdatedAt, &l.SuspendReason)
+		&l.MaxDevices, &l.CreatedAt, &l.UpdatedAt, &l.SuspendReason, &l.ResetCount, &l.LastResetAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -267,26 +280,41 @@ func (s *Store) DeviceByID(id string) (*Device, error) {
 	return scanDevice(s.db.QueryRow(`SELECT `+deviceCols+` FROM devices WHERE id = ?`, id))
 }
 
-func (s *Store) BindDevice(licenseID, fp, id string, keep int, now int64) (*Device, error) {
+func (s *Store) BindDevice(licenseID, fp, id string, keep int, now int64, pol ResetPolicy) (*Device, int, error) {
 	if keep < 1 {
 		keep = 1
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer tx.Rollback()
+	var others int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices
+		WHERE license_id = ? AND fingerprint <> ? AND status = ?`,
+		licenseID, fp, DeviceTrusted).Scan(&others); err != nil {
+		return nil, 0, err
+	}
+	released := others - (keep - 1)
+	if released < 0 {
+		released = 0
+	}
+	if released > 0 && pol.Enforce {
+		if err := applyResetQuota(tx, licenseID, now, pol); err != nil {
+			return nil, 0, err
+		}
+	}
 	if _, err := tx.Exec(`UPDATE devices SET status = ?
 		WHERE license_id = ? AND fingerprint <> ? AND status = ? AND id NOT IN (
 			SELECT id FROM devices WHERE license_id = ? AND fingerprint <> ? AND status = ?
 			ORDER BY bound_at DESC, id DESC LIMIT ?
 		)`, DeviceReleased, licenseID, fp, DeviceTrusted, licenseID, fp, DeviceTrusted, keep-1); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := tx.Exec(`UPDATE sessions SET status = ?
 		WHERE device_id IN (SELECT id FROM devices WHERE license_id = ? AND fingerprint <> ? AND status <> ?)`,
 		SessionRevoked, licenseID, fp, DeviceTrusted); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if _, err := tx.Exec(`INSERT INTO devices (id, license_id, fingerprint, trust, status, bound_at, last_seen_at)
 		VALUES(?,?,?,'unattested',?,?,?)
@@ -294,13 +322,75 @@ func (s *Store) BindDevice(licenseID, fp, id string, keep int, now int64) (*Devi
 			trust = 'unattested', ek_hash = '', ak_pub = NULL,
 			bound_at = excluded.bound_at, last_seen_at = excluded.last_seen_at`,
 		id, licenseID, fp, DeviceTrusted, now, now); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	d, err := scanDevice(tx.QueryRow(`SELECT `+deviceCols+` FROM devices WHERE license_id = ? AND fingerprint = ?`, licenseID, fp))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return d, tx.Commit()
+	return d, released, tx.Commit()
+}
+
+func applyResetQuota(tx *sql.Tx, licenseID string, now int64, pol ResetPolicy) error {
+	var count int
+	var last int64
+	if err := tx.QueryRow(`SELECT reset_count, last_reset_at FROM licenses WHERE id = ?`,
+		licenseID).Scan(&count, &last); err != nil {
+		return err
+	}
+	if pol.CooldownSec > 0 && last > 0 && now-last < pol.CooldownSec {
+		return ErrResetCooldown
+	}
+	if pol.Lifetime > 0 && count >= pol.Lifetime {
+		return ErrResetQuota
+	}
+	_, err := tx.Exec(`UPDATE licenses SET reset_count = reset_count + 1, last_reset_at = ? WHERE id = ?`,
+		now, licenseID)
+	return err
+}
+
+func (s *Store) ResetLicenseDevices(licenseID string, now int64, pol ResetPolicy) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var trusted int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE license_id = ? AND status = ?`,
+		licenseID, DeviceTrusted).Scan(&trusted); err != nil {
+		return 0, err
+	}
+	if trusted == 0 {
+		return 0, tx.Commit()
+	}
+	if pol.Enforce {
+		if err := applyResetQuota(tx, licenseID, now, pol); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE devices SET status = ?, last_seen_at = ?
+		WHERE license_id = ? AND status = ?`,
+		DeviceReleased, now, licenseID, DeviceTrusted); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET status = ?
+		WHERE device_id IN (SELECT id FROM devices WHERE license_id = ?)`,
+		SessionRevoked, licenseID); err != nil {
+		return 0, err
+	}
+	return trusted, tx.Commit()
+}
+
+func (s *Store) ClearResetCounters(licenseID string) (int, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT reset_count FROM licenses WHERE id = ?`, licenseID).Scan(&count); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	_, err := s.db.Exec(`UPDATE licenses SET reset_count = 0, last_reset_at = 0 WHERE id = ?`, licenseID)
+	return count, err
 }
 
 func (s *Store) SetDeviceTrust(id, trust, ekHash string, akPub []byte, now int64) error {
@@ -880,6 +970,9 @@ const (
 	AuditPackageRevoke  = "package.revoke"
 	AuditTokenCreate    = "token.create"
 	AuditTokenRevoke    = "token.revoke"
+	AuditResetHWID      = "hwid.reset"
+	AuditResetQuota     = "hwid.reset_quota"
+	AuditResetsClear    = "hwid.resets_clear"
 	AuditAuthFail       = "auth.fail"
 	AuditBackup         = "backup.export"
 	AuditServerStart    = "server.start"

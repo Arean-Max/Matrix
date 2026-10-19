@@ -79,12 +79,23 @@ ehctl license resume <license-id>        # suspended -> active only
 ehctl license revoke <license-id> --reason "chargeback"   # terminal
 ehctl device revoke <device-id>          # terminal for that binding
 ehctl device release <device-id>         # allow a new binding (fresh OOB code)
+ehctl license clear-resets <license-id>  # operator-only: wipe HWID reset counters
 ```
 
 `license resume` is rejected once a license is `revoked`; create a new license
 instead. `device release` also revokes the device's sessions, so a replacement
 machine starts from a clean activation. A revoked device cannot re-activate
 until an operator explicitly releases it.
+
+**HWID resets.** For single-device licenses (`max_devices: 1`), replacing a
+trusted device consumes one reset. Defaults: 30-day cooldown and three
+automatic resets (`reset_hwid` in `server.yaml`). The client may call
+`POST /api/v1/reset-hwid` to unbind everything and start a clean activation;
+every path still requires a fresh OOB code. When the quota is exhausted the
+license is suspended and `hwid.reset_quota` is audited. Resolve with
+`ehctl license clear-resets <id>`, then
+`ehctl license resume <id> --reason "verified hardware replacement"`.
+Multi-device licenses are not quota-limited; each binding still needs OOB.
 
 Webhook channel: the server POSTs JSON
 
@@ -161,7 +172,8 @@ with the key. This is why the key backup is not optional.
   `eh-server -health-check -config /etc/eh/server.yaml` (exit 0/1).
 - Overview: `ehctl status` (version, uptime, counters).
 - Audit trail: `ehctl audits --limit 50`, filter with `--action` (e.g.
-  `oob.fail`, `session.clone_suspect`, `backup.export`) or `--license`.
+  `oob.fail`, `session.clone_suspect`, `hwid.reset`, `hwid.reset_quota`,
+  `backup.export`) or `--license`.
 - Logs: structured `slog` text on stderr; rate-limit and auth events are
   logged without secrets. No metrics endpoint exists by design — `ehctl
   status`/`audits` are the interface.
@@ -220,6 +232,9 @@ not erase its audit rows).
 | `lease_expired` | client offline past `lease_ttl + grace` | expected — the client must reach the server again |
 | `ack_chain_broken` | cloned machine or telemetry lost | check `session.clone_suspect` audits; policy in `clone.action` |
 | `session_revoked` | device revoked or session superseded | superseded: retry; revoked: `ehctl device release`, then activate with a fresh code |
+| `reset_cooldown` | single-device license reset less than `reset_hwid.cooldown_days` ago | wait for `retry_after_s`; a support reset is `ehctl license clear-resets` + `resume` |
+| `reset_quota` | all automatic HWID resets consumed; license is suspended | verify the hardware change, then `ehctl license clear-resets <id>` + `ehctl license resume <id> --reason ...` |
+| `protocol_unsupported` | client omitted `X-EH-Protocol` or sent an unsupported version | upgrade the client; downgrade is intentionally unsupported |
 | Client state lost or corrupt (`client.state`) | data dir wiped, DPAPI user changed, or copied from another machine | SDK drops the saved session and re-verifies online; keep the data dir for offline continuity |
 | Server: `TLS handshake error` from Schannel/old clients | client TLS stack rejects the cert (private CA) | use the supplied CA or a chain clients trust |
 

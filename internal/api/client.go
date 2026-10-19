@@ -91,6 +91,42 @@ func (s *Server) handleVerifyOOB(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleResetHWID(w http.ResponseWriter, r *http.Request) {
+	start := s.now()
+	defer s.floor(start)
+	if ok, retry := s.ip.AllowRetry("resethwid:"+clientIP(r), 5, 5); !ok {
+		writeRateLimited(w, retry)
+		return
+	}
+
+	var req wire.ResetHWIDRequest
+	if err := decode(w, r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.LicenseKey == "" {
+		writeError(w, missingField("license_key"))
+		return
+	}
+	if req.Fingerprint != "" {
+		if err := validateFingerprint(req.Fingerprint); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if ok, retry := s.account.AllowRetry("resethwid:"+licenseLimitKey(req.LicenseKey), 0.05, 3); !ok {
+		writeRateLimited(w, retry)
+		return
+	}
+
+	resp, err := s.svc.ResetHWID(&req, s.now().Unix())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	if ok, retry := s.ip.AllowRetry("challenge:"+clientIP(r), 30, 30); !ok {
 		writeRateLimited(w, retry)

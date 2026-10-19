@@ -3,6 +3,7 @@ package licensing
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +136,7 @@ func (s *Service) licenseView(l *store.License, now int64) (*wire.LicenseView, e
 		Channel: l.Channel, MaxDevices: l.MaxDevices,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		Devices: devices, ActiveSessions: sessions,
+		ResetCount: l.ResetCount, LastResetAt: l.LastResetAt,
 	}, nil
 }
 
@@ -179,6 +181,21 @@ func (s *Service) SetLicenseStatus(id, status, reason, actor string, now int64) 
 	}[status]
 	s.audit(action, actor, id, "", reason, now)
 	return nil
+}
+
+func (s *Service) ClearResets(id, actor string, now int64) (*wire.LicenseView, error) {
+	l, err := s.store.LicenseByID(id)
+	if err != nil {
+		return nil, err
+	}
+	cleared, err := s.store.ClearResetCounters(l.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.audit(store.AuditResetsClear, actor, l.ID, "", fmt.Sprintf("cleared %d reset(s)", cleared), now)
+	l.ResetCount = 0
+	l.LastResetAt = 0
+	return s.licenseView(l, now)
 }
 
 func (s *Service) RevealOOB(licenseID, actor string, now int64) (*wire.OOBView, error) {

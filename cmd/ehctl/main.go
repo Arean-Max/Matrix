@@ -62,6 +62,7 @@ Usage:
   ehctl license suspend|resume|revoke ID [--reason TEXT]
   ehctl license oob ID          # reveal the current pending activation code
   ehctl license unlock ID       # clear the failed-attempt ladder
+  ehctl license clear-resets ID # wipe HWID reset counters after verification
   ehctl device list [--license ID]
   ehctl device revoke ID        # terminal for this binding
   ehctl device release ID       # allow a new binding

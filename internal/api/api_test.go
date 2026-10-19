@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,6 +76,7 @@ func (e *testEnv) do(t *testing.T, method, path, token string, body any) (*http.
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set(wire.ProtocolHeader, strconv.Itoa(wire.MaxProtocolVersion))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -99,6 +101,7 @@ func (e *testEnv) doRaw(t *testing.T, method, path, token, contentType string, b
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	req.Header.Set(wire.ProtocolHeader, strconv.Itoa(wire.MaxProtocolVersion))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -130,6 +133,39 @@ func wantCode(t *testing.T, resp *http.Response, raw []byte, status int, code st
 	decodeInto(t, raw, &eb)
 	if eb.Error.Code != code {
 		t.Fatalf("code = %q, want %q (body %s)", eb.Error.Code, code, raw)
+	}
+}
+
+func TestProtocolVersionRequired(t *testing.T) {
+	e := testAPI(t)
+
+	req, err := http.NewRequest(http.MethodPost, e.ts.URL+"/api/v1/activate", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	wantCode(t, resp, raw, http.StatusBadRequest, wire.CodeProtocolUnsupported)
+
+	req, _ = http.NewRequest(http.MethodPost, e.ts.URL+"/api/v1/activate", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(wire.ProtocolHeader, "999")
+	resp, err = e.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	wantCode(t, resp, raw, http.StatusBadRequest, wire.CodeProtocolUnsupported)
+
+	resp, raw = e.do(t, http.MethodGet, "/api/v1/health", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health without protocol header: %d %s", resp.StatusCode, raw)
 	}
 }
 
@@ -250,6 +286,29 @@ func TestClientFlowOverHTTP(t *testing.T) {
 	if len(audits.Audits) != 1 || audits.Audits[0].Actor != "client" {
 		t.Fatalf("audits = %+v", audits)
 	}
+
+	resp, raw = e.do(t, http.MethodPost, "/api/v1/reset-hwid", "",
+		wire.ResetHWIDRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reset-hwid: %d %s", resp.StatusCode, raw)
+	}
+	var rr wire.ResetHWIDResponse
+	decodeInto(t, raw, &rr)
+	if rr.Status != wire.StatusReleased || rr.DevicesReleased != 1 {
+		t.Fatalf("reset-hwid = %+v", rr)
+	}
+
+	resp, raw = e.do(t, http.MethodPost, "/admin/v1/licenses/"+lic.ID+"/resets/clear", e.adminTok, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear resets: %d %s", resp.StatusCode, raw)
+	}
+	var lv wire.LicenseView
+	decodeInto(t, raw, &lv)
+	if lv.ResetCount != 0 || lv.LastResetAt != 0 {
+		t.Fatalf("clear resets = %+v", lv)
+	}
+	resp, raw = e.do(t, http.MethodPost, "/admin/v1/licenses/"+lic.ID+"/resets/clear", "", nil)
+	wantCode(t, resp, raw, http.StatusUnauthorized, wire.CodeUnauthorized)
 }
 
 func TestAdminAuthAndRoles(t *testing.T) {

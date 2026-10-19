@@ -3,30 +3,38 @@ package wire
 import "encoding/base64"
 
 const (
-	CodeInvalidRequest     = "invalid_request"
-	CodeInvalidLicense     = "invalid_license"
-	CodeLicenseUnavailable = "license_unavailable"
-	CodeInvalidCode        = "invalid_code"
-	CodeCodeLocked         = "code_locked"
-	CodeOOBExpired         = "oob_expired"
-	CodeOOBRequired        = "oob_required"
-	CodeInvalidNonce       = "invalid_nonce"
-	CodeAttestationFailed  = "attestation_failed"
-	CodeActivationFailed   = "activation_failed"
-	CodeBadSignature       = "bad_signature"
-	CodeUnknownSession     = "unknown_session"
-	CodeLeaseExpired       = "lease_expired"
-	CodeSessionRevoked     = "session_revoked"
-	CodeAckChainBroken     = "ack_chain_broken"
-	CodeRateLimited        = "rate_limited"
-	CodeUnauthorized       = "unauthorized"
-	CodeInternal           = "internal"
+	CodeInvalidRequest      = "invalid_request"
+	CodeInvalidLicense      = "invalid_license"
+	CodeLicenseUnavailable  = "license_unavailable"
+	CodeInvalidCode         = "invalid_code"
+	CodeCodeLocked          = "code_locked"
+	CodeOOBExpired          = "oob_expired"
+	CodeOOBRequired         = "oob_required"
+	CodeInvalidNonce        = "invalid_nonce"
+	CodeAttestationFailed   = "attestation_failed"
+	CodeActivationFailed    = "activation_failed"
+	CodeBadSignature        = "bad_signature"
+	CodeUnknownSession      = "unknown_session"
+	CodeLeaseExpired        = "lease_expired"
+	CodeSessionRevoked      = "session_revoked"
+	CodeAckChainBroken      = "ack_chain_broken"
+	CodeResetCooldown       = "reset_cooldown"
+	CodeResetQuota          = "reset_quota"
+	CodeProtocolUnsupported = "protocol_unsupported"
+	CodeRateLimited         = "rate_limited"
+	CodeUnauthorized        = "unauthorized"
+	CodeInternal            = "internal"
 )
 
 const (
 	StatusReady       = "ready"
 	StatusOOBRequired = "oob_required"
 	StatusActive      = "active"
+	StatusReleased    = "released"
+
+	ProtocolHeader     = "X-EH-Protocol"
+	MinProtocolVersion = 1
+	MaxProtocolVersion = 1
 
 	TrustTPMAttested = "tpm-attested"
 	TrustTPMQuote    = "tpm-quote"
@@ -63,6 +71,16 @@ type VerifyOOBRequest struct {
 
 type VerifyOOBResponse struct {
 	Status string `json:"status"`
+}
+
+type ResetHWIDRequest struct {
+	LicenseKey  string `json:"license_key"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+type ResetHWIDResponse struct {
+	Status          string `json:"status"`
+	DevicesReleased int    `json:"devices_released"`
 }
 
 type EKInfo struct {
@@ -166,6 +184,8 @@ type LicenseView struct {
 	UpdatedAt      int64  `json:"updated_at"`
 	Devices        int    `json:"devices"`
 	ActiveSessions int    `json:"active_sessions"`
+	ResetCount     int    `json:"reset_count"`
+	LastResetAt    int64  `json:"last_reset_at,omitempty"`
 }
 
 type LicenseListResponse struct {

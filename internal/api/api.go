@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -80,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /api/v1/activate", s.handleActivate)
 	mux.HandleFunc("POST /api/v1/verify-oob", s.handleVerifyOOB)
+	mux.HandleFunc("POST /api/v1/reset-hwid", s.handleResetHWID)
 	mux.HandleFunc("POST /api/v1/challenge", s.handleChallenge)
 	mux.HandleFunc("POST /api/v1/verify", s.handleVerify)
 	mux.HandleFunc("POST /api/v1/heartbeat", s.handleHeartbeat)
@@ -92,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/v1/licenses/{id}/suspend", s.admin("admin", s.adminSuspendLicense))
 	mux.HandleFunc("POST /admin/v1/licenses/{id}/resume", s.admin("admin", s.adminResumeLicense))
 	mux.HandleFunc("POST /admin/v1/licenses/{id}/revoke", s.admin("admin", s.adminRevokeLicense))
+	mux.HandleFunc("POST /admin/v1/licenses/{id}/resets/clear", s.admin("admin", s.adminClearResets))
 	mux.HandleFunc("GET /admin/v1/licenses/{id}/oob", s.admin("admin", s.adminRevealOOB))
 	mux.HandleFunc("POST /admin/v1/licenses/{id}/oob/unlock", s.admin("admin", s.adminUnlockOOB))
 	mux.HandleFunc("GET /admin/v1/devices", s.admin("read", s.adminListDevices))
@@ -107,7 +110,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/v1/status", s.admin("read", s.adminStatus))
 	mux.HandleFunc("GET /admin/v1/backup", s.admin("admin", s.adminBackup))
 
-	return s.common(mux)
+	return s.common(s.protocol(mux))
+}
+
+func (s *Server) protocol(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/") || r.URL.Path == "/api/v1/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		v, err := strconv.Atoi(r.Header.Get(wire.ProtocolHeader))
+		if err != nil || v < wire.MinProtocolVersion || v > wire.MaxProtocolVersion {
+			writeJSON(w, http.StatusBadRequest, wire.ErrorBody{
+				Error: wire.Error{
+					Code: wire.CodeProtocolUnsupported,
+					Message: fmt.Sprintf("%s header must be an integer in [%d..%d]",
+						wire.ProtocolHeader, wire.MinProtocolVersion, wire.MaxProtocolVersion),
+				},
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -26,3 +26,8 @@ security:
 
 clone:
   action: flag
+
+reset_hwid:
+  enabled: true
+  cooldown_days: 30
+  lifetime_limit: 3

@@ -208,3 +208,59 @@ clear). The cost is honest and bounded: `ek_pub` carries no EK certificate,
 so the authenticity of the EK is whatever first-seen enrollment grants (TOFU)
 — see PROTOCOL §3.3 and ADR-008; DRM-grade EK certificate validation is out
 of scope.
+
+## ADR-020 — Spec v12 triage: adopted hardening vs rejected anti-reverse stack
+
+**Context.** A vendor-side proposal ("Spec v12") asked for a C++20 Windows
+client wrapped in eight anti-reverse layers (dual cellular-automata VM,
+non-associative quasigroup MBA, white-box tables, `.pdata` exception
+steganography, L1d cache-eviction sensing, chaff execution graphs, symbolic
+path explosion, server-fed decoy constants), plus a list of protocol
+hardening items. This ADR records what was adopted and what was rejected.
+
+**Adopted (verifiable, testable, no new trust assumptions).**
+- `X-EH-Protocol` negotiation with a single supported version, rejected
+  before body decoding (`protocol_unsupported`, no fallback).
+- HWID reset accounting: one reset per displaced trusted device on
+  single-device licenses, 30-day cooldown, three lifetime resets, atomic
+  check-increment-release in SQLite, suspension on exhaustion, admin
+  `clear-resets`. OOB is still required for every re-bind.
+- AK attribute policy (`restricted`, `sign`, `fixedTPM`, `fixedParent`,
+  `sensitiveDataOrigin`) — already enforced by `internal/attestation`; for
+  the primary-key design (ADR-019) this is the meaningful subset of the
+  spec's CertifyCreation requirement.
+- Deterministic clone detection with supersede grace and optional suspension
+  — already implemented in `internal/licensing` (`session.clone_suspect`,
+  `clone.action`).
+
+**Rejected.**
+- **C++20 client rewrite.** ADR-001 removed the v1 C++ runtime for memory
+  safety and undefined behaviour; the client is the component that parses
+  attacker-controlled TPM and package bytes. Rewriting it in C++ trades the
+  project's strongest security property for no measurable benefit.
+- **Eight-layer anti-reverse stack.** It is unverifiable by construction,
+  and several layers contradict the project's EDR-compatibility goal:
+  custom `.pdata` unwind handlers and non-canonical pointer faults are
+  indistinguishable from malware heuristics; cache-latency thresholds fire
+  under ordinary scheduler pressure; chaff execution silently corrupts
+  customer output and makes support impossible; decoy constants require the
+  server to keep a second, lying protocol. None of this changes the licence
+  gating threat model: a determined owner can still dump a licensed process.
+- **Client-side honeypot telemetry.** Hidden `honeypot_triggered` flags are
+  attacker-controlled input and turn the admin panel into a disinformation
+  channel. The server only accepts typed, server-verifiable signals today.
+- **PoW on `/activate`.** Rate limits and the constant-time response floor
+  already bound enumeration; PoW shifts cost to legitimate users and is
+  trivially outsourced to GPUs. Not implemented; revisit only with evidence
+  of a real enumeration campaign.
+- **TCG event-log parsing, EK certificate chains (STRICT_ENTERPRISE),
+  CRL/short-lived admin certificates, OS-keyring DB keys, signed lease
+  tokens with `kid` rotation.** Valuable, but each is a protocol/ops project
+  of its own. They are tracked as roadmap items in the audit report; the
+  current honest boundary (TOFU, field-level encryption) is documented in
+  `THREAT_MODEL.md` A6 and `PROTOCOL.md` §3.4.
+
+**Consequences.** The attack surface stays small and reviewable; every new
+control is covered by tests and audit records. The project does not claim
+"unbreakable" client code and continues to describe itself as license gating
+with economic friction, not DRM.

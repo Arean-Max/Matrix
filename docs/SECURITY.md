@@ -156,6 +156,6 @@ go build ./cmd/... && cd rust && cargo build --release -p eh-client
 ```
 
 Every cryptographic binding asserted above has a unit test; the HTTP flow
-has an end-to-end integration test (`internal/api/api_test.go`); the client
+has an end-to-end integration test (`internal/api/client_test.go`); the client
 was verified live against the server, including TPM quote and activation on
 real hardware (Windows, TBS).

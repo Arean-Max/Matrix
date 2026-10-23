@@ -27,7 +27,7 @@ signal, not as a hardware guarantee.
 
 ## Quickstart (server)
 
-Requirements: Go 1.27+, Rust 1.99+ only if you want the isolated verifier.
+Requirements: Go 1.27.3+ (the patch fixes GO-2026-6809 in `crypto/x509`), Rust 1.99+ only if you want the isolated verifier.
 
 ```sh
 # 1. Build

@@ -21,10 +21,15 @@ implemented against it. When code and document disagree, one of them is a bug.
   boundary. This rule applies to `ak_pub`, `attest`, `signature`,
   `enc_secret`, `id_object`.
 - Client API root: `/api/v1`. Admin API root: `/admin/v1`.
-- Every client API request except `GET /api/v1/health` MUST carry
-  `X-EH-Protocol: 1`. Missing, non-integer or out-of-range values are
-  rejected with `protocol_unsupported` before the body is decoded. There is
-  no fallback and no legacy mode; version 1 is both the minimum and maximum.
+- Every client API request except `GET /api/v1/health` and
+  `GET /api/v1/ready` MUST carry `X-EH-Protocol: 1`. Missing, non-integer or
+  out-of-range values are rejected with `protocol_unsupported` before the body
+  is decoded. There is no fallback and no legacy mode; version 1 is both the
+  minimum and maximum.
+- Every response carries `X-Request-ID`. A client-supplied value is accepted
+  only when it is 8–64 characters from `[A-Za-z0-9._-]`; otherwise the server
+  generates one. JSON error bodies repeat it as `request_id`. Quote that value
+  in support requests; it is the key to the server log line.
 
 ## 2. Identifiers
 
@@ -71,7 +76,7 @@ silicon.
 Error body (all non-2xx):
 
 ```json
-{"error": {"code": "invalid_license", "message": "human-readable text"}}
+{"error": {"code": "invalid_license", "message": "human-readable text", "request_id": "9f1c0b7a4e2d8c31"}}
 ```
 
 Error codes: `invalid_request` (400), `protocol_unsupported` (400),
@@ -94,6 +99,17 @@ floor (~150 ms) on `/activate` and `/verify-oob` to flatten timing.
 `GET /api/v1/health` is the unauthenticated liveness probe for container
 orchestrators: `{"ok": true, "version": "2.0.0"}`. It exposes nothing beyond
 the software version.
+
+`GET /api/v1/ready` is the readiness probe. It checks SQLite and reports the
+configured attestation backend:
+
+```json
+{"ok": true, "version": "2.0.0", "database": "ok", "attestation": "trustd", "attestation_mode": "auto", "request_id": "9f1c0b7a4e2d8c31"}
+```
+
+A database failure returns 503. A trustd outage does not fail readiness: the
+admin plane, heartbeats and existing sessions remain usable; only new quote
+and activation work fails closed.
 
 ### 3.1 POST /api/v1/activate
 

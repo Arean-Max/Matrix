@@ -326,3 +326,39 @@ which is exactly where memory-unsafe parsers are the wrong tool.
 C-ABI-free integration (no cgo), plus ASan/UBSan and differential fuzzing
 against the existing implementation. Absent that, C++ stays out: language
 choice follows the data, not preference.
+
+## ADR-023 — Modular monolith, request correlation, no network microservices
+
+**Context.** The server had grown into a few large files: `store.go` mixed
+every aggregate, `licensing/service.go` mixed every workflow, and the API
+transport lived in one file. Navigation was poor and a 500 log did not carry a
+stable identifier an operator could quote. The proposal on the table was to
+split the deployment into microservices so that one failed service would not
+stop the others.
+
+**Decision.** Keep one deployable process and split it internally by feature.
+Each package has one reason to change; large files were replaced with
+aggregate/workflow/transport files (see `docs/ARCHITECTURE.md` §4–5). Add
+`internal/platform/reqid` and make every JSON error carry `request_id`.
+`GET /api/v1/ready` reports database and attestation-backend status.
+
+**Why not microservices.** The server owns one SQLite database and a set of
+transactional invariants (bind device + consume OOB, start session + supersede
+older sessions, revoke license + sessions). Splitting those into network
+services would replace in-process transactions with sagas, add service
+discovery, auth between services, retries, version skew and new partial-failure
+modes. A single-node self-hosted product would become harder to install and
+debug, and "one service is down" would become the normal case rather than the
+exception. The existing Rust `eh-trustd` is the one boundary that earns process
+isolation: it parses attacker-controlled TPM data, has no keys or DB access,
+and failing closed is the correct behavior. We will extract another service
+only when an independent scaling or security boundary is measured, not because
+the tree is large.
+
+**Consequences.** One binary, one backup, one config file. Failures are
+contained by package and by component: a database failure is surfaced
+(readiness 503, data requests 500), trustd failure affects only
+quote/activation, webhook failure leaves the OOB code available for manual
+retrieval, and a janitor panic is logged without killing the process.
+Compile-time package dependencies make accidental coupling visible. A future
+split has a stable interface and a clear data owner.

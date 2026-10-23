@@ -197,13 +197,21 @@ with the key. This is why the key backup is not optional.
 
 - Liveness: `GET /api/v1/health` → `{"ok":true,"version":…}`; or
   `eh-server -health-check -config /etc/eh/server.yaml` (exit 0/1).
+- Readiness: `GET /api/v1/ready` → database and attestation backend; 503 only
+  when SQLite is unavailable.
 - Overview: `ehctl status` (version, uptime, counters).
 - Audit trail: `ehctl audits --limit 50`, filter with `--action` (e.g.
   `oob.fail`, `session.clone_suspect`, `hwid.reset`, `hwid.reset_quota`,
   `backup.export`) or `--license`.
-- Logs: structured `slog` text on stderr; rate-limit and auth events are
-  logged without secrets. No metrics endpoint exists by design — `ehctl
-  status`/`audits` are the interface.
+- Logs: JSON `slog` on stderr. Every request has an `X-Request-ID`; a 5xx log
+  line contains `request_id`, `method`, `path`, `error` and `stack`. When a
+  user reports a failure, ask for the ID from the response header or error
+  body and search for it; do not ask them to reproduce with verbose logging.
+  Rate-limit and auth events are logged without secrets. No metrics endpoint
+  exists by design — `ehctl status`/`audits` are the interface.
+- Failure isolation: a trustd crash affects only new quote/activation work;
+  a webhook failure leaves the OOB code for manual retrieval; a janitor panic
+  is logged and the loop continues. A database outage is the one hard failure.
 - Failed admin authentication is audited as `auth.fail` with the peer address
   (never the token). Alert on bursts.
 - Alerts worth having: `auth.fail` bursts, `oob.lock` entries,
@@ -265,6 +273,7 @@ not erase its audit rows).
 | `reset_cooldown` | single-device license reset less than `reset_hwid.cooldown_days` ago | wait for `retry_after_s`; a support reset is `ehctl license clear-resets` + `resume` |
 | `reset_quota` | all automatic HWID resets consumed; license is suspended | verify the hardware change, then `ehctl license clear-resets <id>` + `ehctl license resume <id> --reason ...` |
 | `protocol_unsupported` | client omitted `X-EH-Protocol` or sent an unsupported version | upgrade the client; downgrade is intentionally unsupported |
+| Any 5xx with a `request_id` | server-side failure; the response header/body carries the correlation ID | search the JSON log for that `request_id`; the entry has route, method, path, error and stack |
 | Startup fails with `attestation verifier: trustd: ...` | `attestation.trustd_path` is set but the binary is missing, not executable, or did not answer `ping` | fix the path/permissions; the server intentionally refuses to start rather than silently using another verifier |
 | Attestations fail with `trustd:` in the log while `attestation.mode: required` | the daemon was killed/updated, timed out, or rejected a non-standard signature | check the server log for the daemon error; the request fails closed. Identity of the binary matters: rebuild from this tree, do not substitute another tool |
 | Log says `backend=embedded` after configuring trustd | the path came from YAML/env but the server restarted without it, or the key is misspelled | check `EH_ATTESTATION_TRUSTD_PATH` and `attestation.trustd_path`; `KnownFields` rejects unknown YAML keys, so a typo fails startup |

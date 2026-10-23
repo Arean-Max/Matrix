@@ -21,6 +21,8 @@
 
 *.log
 
+/bin/
+/bin-smoke/
 /data/
 /certs/
 *.pem
@@ -28,8 +30,15 @@
 *.token
 *.provision.json
 *.ehpkg
+server.yaml
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
 
 Thumbs.db
 Desktop.ini
+.DS_Store
 
 build/

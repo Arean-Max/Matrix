@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["eh-core", "eh-client"]
+members = ["eh-core", "eh-client", "eh-trustd"]
 
 [workspace.package]
 version = "2.0.0"

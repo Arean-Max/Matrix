@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"eventhorizon/internal/attestation"
@@ -54,6 +55,9 @@ type Service struct {
 	cfg      *config.Config
 	notifier *notify.Notifier
 
+	verifier   attestation.Verifier
+	verifierMu sync.RWMutex
+
 	kLic []byte
 	kOOB []byte
 	kVM  []byte
@@ -67,10 +71,26 @@ func New(st *store.Store, cfg *config.Config, notifier *notify.Notifier, masterK
 		store:    st,
 		cfg:      cfg,
 		notifier: notifier,
+		verifier: attestation.Embedded{},
 		kLic:     cryptox.Subkey(masterKey, cryptox.InfoLicenseHMAC),
 		kOOB:     cryptox.Subkey(masterKey, cryptox.InfoOOB),
 		kVM:      cryptox.Subkey(masterKey, cryptox.InfoVMSeed),
 	}
+}
+
+func (s *Service) SetVerifier(v attestation.Verifier) {
+	if v == nil {
+		return
+	}
+	s.verifierMu.Lock()
+	s.verifier = v
+	s.verifierMu.Unlock()
+}
+
+func (s *Service) activeVerifier() attestation.Verifier {
+	s.verifierMu.RLock()
+	defer s.verifierMu.RUnlock()
+	return s.verifier
 }
 
 func (s *Service) licenseByKey(key string) (*store.License, error) {
@@ -408,9 +428,11 @@ func (s *Service) buildActivation(dev *store.Device, ek *wire.EKInfo, n *store.N
 	if hex.EncodeToString(sum[:]) != ek.EKHash {
 		return nil, errf(wire.CodeAttestationFailed, "ek_pub does not match ek_hash")
 	}
-	if _, name, err := attestation.CheckAK(akPub); err != nil {
+	name, err := s.activeVerifier().CheckAK(akPub)
+	if err != nil {
 		return nil, errf(wire.CodeAttestationFailed, "ak rejected: %v", err)
-	} else if hex.EncodeToString(name) != ek.AKName {
+	}
+	if hex.EncodeToString(name) != ek.AKName {
 		return nil, errf(wire.CodeAttestationFailed, "ak_name does not match ak_pub")
 	}
 	if dev.EKHash != "" && dev.EKHash != ek.EKHash {
@@ -625,7 +647,7 @@ func (s *Service) verifyQuote(nonce *store.Nonce, dev *store.Device, q *wire.Quo
 	if err != nil {
 		return nil, err
 	}
-	quote, err := attestation.VerifyQuote(attest, sig, akPub, q.AKName, nonceBytes)
+	quote, err := s.activeVerifier().VerifyQuote(attest, sig, akPub, q.AKName, nonceBytes)
 	if err != nil {
 		return nil, errf(wire.CodeAttestationFailed, "%v", err)
 	}

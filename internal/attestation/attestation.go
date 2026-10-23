@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -20,6 +21,15 @@ var ErrRejected = errors.New("attestation: rejected")
 
 func reject(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrRejected, fmt.Sprintf(format, args...))
+}
+
+func canonicalPublic(pub *gotpm.TPMTPublic, raw []byte) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return bytes.Equal(gotpm.Marshal(pub), raw)
 }
 
 func CheckAK(akPubArea []byte) (*gotpm.TPMTPublic, []byte, error) {
@@ -42,11 +52,14 @@ func CheckAK(akPubArea []byte) (*gotpm.TPMTPublic, []byte, error) {
 	if a.Decrypt {
 		return pub, nil, reject("ak is a decryption key")
 	}
-	name, err := gotpm.ObjectName(pub)
-	if err != nil {
-		return pub, nil, reject("ak name: %v", err)
+	if !canonicalPublic(pub, akPubArea) {
+		return pub, nil, reject("decode ak public: non-canonical encoding")
 	}
-	return pub, name.Buffer, nil
+	sum := sha256.Sum256(akPubArea)
+	name := make([]byte, 0, 2+sha256.Size)
+	name = append(name, byte(gotpm.TPMAlgSHA256>>8), byte(gotpm.TPMAlgSHA256))
+	name = append(name, sum[:]...)
+	return pub, name, nil
 }
 
 type Quote struct {

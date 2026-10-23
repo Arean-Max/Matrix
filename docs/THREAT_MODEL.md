@@ -105,6 +105,12 @@ which proofs the client produced, not that a physical TPM produced them. An
 attacker who reaches the license before its owner can also enroll first; OOB
 delivery out of band and `ek_hash` review raise the cost but do not close this.
 DRM-grade enforcement requires EK certificate validation (out of scope).
+With `attestation.trustd_path` set, the bytes above are parsed and the quote
+signature checked in the `eh-trustd` child process (ADR-021) — the same trust
+decision made behind a narrower interface: RSA ≥2048 PKCS#1/PSS SHA-256/384,
+ECDSA P-256/SHA-256 and P-384/SHA-384, PSS salt equal to the digest size.
+`MakeCredential` still runs in Go, so the EK public area is not yet behind
+that boundary.
 
 ### A7 — OOB code brute force
 
@@ -141,7 +147,11 @@ against a malicious operator: they own the deployment.
 Body cap (1 MiB), strict Content-Type, header cap (16 KiB), read/write
 timeouts, per-IP and per-endpoint rate limits, response floor on
 unauthenticated endpoints. The server is single-tenant: one node, one
-SQLite file, no upstream dependencies to amplify against.
+SQLite file, no upstream dependencies to amplify against. The trust daemon is
+spawned without sockets and with a request timeout; a hung or crashing child
+costs at most one bounded timeout window per call and fails closed, it cannot
+exhaust server memory beyond one request line (1 MiB) and one 64 KiB buffered
+reader.
 
 ### A11 — Supply chain
 

@@ -1,9 +1,9 @@
 # Event Horizon
 
 Self-hosted software licensing with TPM-assisted device attestation for
-Windows applications. One Go server, one operations CLI, one vendor-side
-packager, one Rust client SDK. No telemetry, no third-party services, no
-phone-home beyond your own server.
+Windows applications. One Go server, one optional Rust trust daemon, one
+operations CLI, one vendor-side packager, one Rust client SDK. No telemetry,
+no third-party services, no phone-home beyond your own server.
 
 This raises the cost of casual piracy and makes shared licenses traceable and
 revocable. A determined attacker who controls the client machine can still get
@@ -21,20 +21,28 @@ signal, not as a hardware guarantee.
 | `cmd/ehctl` | operator CLI: PKI bootstrap, licenses, devices, packages, audits, tokens, backup |
 | `cmd/eh-builder` | vendor CLI: packages a payload into a sealed `.ehpkg` + provision request |
 | `rust/eh-core` | `EHVM1` bytecode machine and assembler (see `docs/VM.md`) |
+| `rust/eh-trustd` | isolated TPM quote verifier: parses untrusted TPM bytes, verifies signatures, holds no DB/keys/sockets |
 | `rust/eh-client` | Windows client SDK: TLS, TPM2/TBS, DPAPI state, C ABI, demo binary |
 | `internal/…` | server packages with hard module boundaries (see `docs/ARCHITECTURE.md`) |
 
 ## Quickstart (server)
 
-Requirements: Go 1.27+.
+Requirements: Go 1.27+, Rust 1.99+ only if you want the isolated verifier.
 
 ```sh
 # 1. Build
-go build ./cmd/...
+mkdir -p bin
+go build -o bin/eh-server ./cmd/eh-server
+go build -o bin/ehctl ./cmd/ehctl
+go build -o bin/eh-builder ./cmd/eh-builder
+cargo build --release --manifest-path rust/Cargo.toml -p eh-trustd
+export PATH="$PWD/bin:$PATH"
 
 # 2. Configure (TLS is mandatory unless you set security.dev_allow_http)
-cp deploy/config/server.example.yaml server.yaml   # edit cert paths
-./eh-server -config server.yaml
+cp deploy/config/server.example.yaml server.yaml   # edit tls.* and trustd_path
+# the example enables /usr/local/bin/eh-trustd; point it at the absolute
+# path of rust/target/release/eh-trustd, or delete the key for embedded mode
+eh-server -config server.yaml
 ```
 
 On the first start the server writes `<data_dir>/bootstrap.token` and logs
@@ -89,5 +97,5 @@ with `ehctl license oob <license-id>` and re-run with `--code`.
 ```sh
 go test ./...            # server: unit + full HTTP integration
 go test -race ./...      # same under the race detector (needs gcc)
-cd rust && cargo test    # VM + client (crypto, http, state, tpm parsing)
+cd rust && cargo test    # VM + client + trustd (crypto, http, state, tpm parsing)
 ```

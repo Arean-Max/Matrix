@@ -10,10 +10,17 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X eventhorizon/internal/ve
         -o /out/ehctl ./cmd/ehctl
 RUN mkdir -p /out/data && chown 65532:65532 /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM rust:1.99.0-bookworm AS trustd
+WORKDIR /src
+COPY rust ./rust
+RUN cargo build --locked --release --manifest-path rust/Cargo.toml -p eh-trustd
+
+FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /out/eh-server /usr/local/bin/eh-server
 COPY --from=build /out/ehctl /usr/local/bin/ehctl
+COPY --from=trustd /src/rust/target/release/eh-trustd /usr/local/bin/eh-trustd
 COPY --from=build --chown=65532:65532 /out/data /data
+ENV EH_ATTESTATION_TRUSTD_PATH=/usr/local/bin/eh-trustd
 VOLUME ["/data"]
 EXPOSE 8443
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

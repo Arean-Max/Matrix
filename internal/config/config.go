@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,9 @@ type Attestation struct {
 	Mode string `yaml:"mode"`
 
 	ExpectedPCRDigest string `yaml:"expected_pcr_digest"`
+
+	TrustdPath      string `yaml:"trustd_path"`
+	TrustdTimeoutMS int    `yaml:"trustd_timeout_ms"`
 }
 
 type Notify struct {
@@ -82,7 +86,7 @@ func Default() *Config {
 			MaxAttempts:       5,
 			ResendIntervalSec: 60,
 		},
-		Attestation: Attestation{Mode: "auto"},
+		Attestation: Attestation{Mode: "auto", TrustdTimeoutMS: 2000},
 		Notify:      Notify{TimeoutSec: 5},
 		Security: Security{
 			SupersedeGraceSec:  300,
@@ -132,6 +136,16 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("EH_ATTESTATION_MODE"); v != "" {
 		c.Attestation.Mode = v
 	}
+	if v, ok := os.LookupEnv("EH_ATTESTATION_TRUSTD_PATH"); ok {
+		c.Attestation.TrustdPath = v
+	}
+	if v := os.Getenv("EH_ATTESTATION_TRUSTD_TIMEOUT_MS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			n = -1
+		}
+		c.Attestation.TrustdTimeoutMS = n
+	}
 	if v := os.Getenv("EH_WEBHOOK_URL"); v != "" {
 		c.Notify.WebhookURL = v
 	}
@@ -163,6 +177,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Attestation.ExpectedPCRDigest != "" && !isHex64(c.Attestation.ExpectedPCRDigest) {
 		return errors.New("attestation.expected_pcr_digest must be 64 hex characters")
+	}
+	if c.Attestation.TrustdTimeoutMS < 100 || c.Attestation.TrustdTimeoutMS > 30000 {
+		return errors.New("attestation.trustd_timeout_ms must be between 100 and 30000")
+	}
+	if c.Attestation.TrustdPath != "" && !filepath.IsAbs(c.Attestation.TrustdPath) {
+		return errors.New("attestation.trustd_path must be absolute")
 	}
 	switch c.Clone.Action {
 	case "flag", "suspend":

@@ -17,7 +17,8 @@ for marginal gain; Go's stdlib crypto and ops story win here.
 
 ## ADR-002 — One Go module, one Rust workspace
 **Decision.** `go.mod` at the root serves all three Go binaries; `rust/` is a
-Cargo workspace with `eh-core` and `eh-client`.
+Cargo workspace with `eh-core` (VM), `eh-client` (SDK) and `eh-trustd`
+(isolated TPM verifier).
 **Why.** Shared `internal/` packages (wire, packaging) must not become copies;
 separate modules would force version pinning inside one repo.
 
@@ -264,3 +265,64 @@ hardening items. This ADR records what was adopted and what was rejected.
 control is covered by tests and audit records. The project does not claim
 "unbreakable" client code and continues to describe itself as license gating
 with economic friction, not DRM.
+
+## ADR-021 — Isolated Rust verifier for untrusted TPM data (eh-trustd)
+
+**Decision.** TPM public-area parsing, `TPMS_ATTEST` / `TPMT_SIGNATURE`
+parsing and quote signature verification live in `rust/eh-trustd`, a stateless
+binary that speaks one JSON request/response per line over stdin/stdout.
+`eh-server` spawns it when `attestation.trustd_path` is set (the Docker image
+sets it by default) and otherwise uses the existing Go implementation
+(`attestation.Embedded`). Both satisfy `attestation.Verifier`; a differential
+test runs identical fixtures through both and compares results, including
+every truncation step and the rejection cases. That sweep found a go-tpm
+leniency: a public area cut just before its unique field parsed as a key with
+an empty modulus. `CheckAK` now re-marshals the parsed key and requires the
+original bytes to match, so both backends reject non-canonical public areas.
+
+**Why.** These bytes are the only attacker-controlled parser input on the
+server that is not business logic. The child has no sockets, no database
+handle, no keys and an empty environment (so it cannot inherit
+`EH_MASTER_KEY`); a parser or panic bug cannot take down the control plane or
+read secrets passed to the parent. It runs as the same service user, so this
+is isolation of the untrusted path, not a kernel sandbox. A crash, timeout or
+malformed response fails the request closed and the child respawns. It is also
+faster and leaner than the reflective go-tpm path. On an i5-12400F (Go 1.27,
+rustc 1.99; median of five 2-second runs on a quiet host): `CheckAK` is 31µs
+/ 25 allocations over the pipe against 75µs / ~1.2k allocations embedded; an
+RSA quote is 65µs against 139µs, and an ECDSA quote 98µs against 167µs, at
+3.4–4.9KB against 17–18KB per operation. Absolute numbers move with host load;
+a run with the desktop at 82% CPU roughly doubled both sides, while the
+ordering and the allocation gap held.
+
+**Limits, tested and documented.** RSA ≥2048 with PKCS#1/PSS and SHA-256/384;
+ECDSA P-256/SHA-256 and P-384/SHA-384. PSS salt length must equal the digest
+size (TPM 2.0 behaviour); the embedded Go verifier is more permissive, so
+trustd is strictly narrower. `MakeCredential` (credential activation, which
+parses the client's EK public area) stays in Go until its path is split too.
+Embedded mode remains fully supported; the daemon is an operator choice, not a
+hard dependency.
+
+## ADR-022 — No C++ component without a measured CPU-bound bottleneck
+
+**Decision.** The tree keeps zero C++ (consistent with ADR-001 and ADR-020).
+This ADR records the measurement that closes the recurring "add C++ for speed
+and memory control" proposal.
+
+**Measurement (i5-12400F; Go 1.27, rustc 1.99; median of five 2-second
+`go test -bench` runs on a quiet host; a loaded host scaled both sides by
+~1.5–2× without changing the ordering).** Full quote verification including
+all TPM parsing: Go 139µs (RSA) and 167µs (ECDSA), 17–18KB and 1000+
+allocations; Rust 65µs (RSA) and 98µs (ECDSA) end-to-end over the pipe, which
+includes IPC and JSON, at 3.4–4.9KB and 45 allocations. `CheckAK`: 75µs Go vs
+31µs Rust. A single activation HTTP request spends its budget in TLS, SQLite
+and JSON — milliseconds, not microseconds — so attestation is a low
+single-digit percentage of request time. There is no measured kernel a C++
+rewrite could accelerate, and every candidate input is attacker-controlled,
+which is exactly where memory-unsafe parsers are the wrong tool.
+
+**Entry criterion for revisiting.** A profile showing a CPU-bound loop above
+20% of end-to-end request time, plus a benchmark committed next to it, plus a
+C-ABI-free integration (no cgo), plus ASan/UBSan and differential fuzzing
+against the existing implementation. Absent that, C++ stays out: language
+choice follows the data, not preference.

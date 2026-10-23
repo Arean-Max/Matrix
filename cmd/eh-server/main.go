@@ -23,6 +23,7 @@ import (
 	"eventhorizon/internal/licensing"
 	"eventhorizon/internal/notify"
 	"eventhorizon/internal/store"
+	"eventhorizon/internal/trustd"
 	"eventhorizon/internal/version"
 )
 
@@ -108,6 +109,17 @@ func run(configPath string, log *slog.Logger) error {
 	defer st.Close()
 
 	svc := licensing.New(st, cfg, notify.New(cfg.NotifyTimeout(), cfg.Notify.WebhookSecret), master)
+	if cfg.Attestation.TrustdPath != "" {
+		verifier, err := trustd.New(cfg.Attestation.TrustdPath, time.Duration(cfg.Attestation.TrustdTimeoutMS)*time.Millisecond, log)
+		if err != nil {
+			return fmt.Errorf("attestation verifier: %w", err)
+		}
+		defer verifier.Close()
+		svc.SetVerifier(verifier)
+		log.Info("attestation verifier", "backend", "trustd", "path", cfg.Attestation.TrustdPath)
+	} else {
+		log.Info("attestation verifier", "backend", "embedded")
+	}
 
 	bootstrap, err := bootstrapToken(st, cfg, log)
 	if err != nil {

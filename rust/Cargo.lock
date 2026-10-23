@@ -228,6 +228,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eh-trustd"
+version = "2.0.0"
+dependencies = [
+ "base64",
+ "hex",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

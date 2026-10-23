@@ -25,6 +25,9 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("EH_TLS_CERT", "c.pem")
 	t.Setenv("EH_TLS_KEY", "k.pem")
 	t.Setenv("EH_ATTESTATION_MODE", "required")
+	trustdPath := filepath.Join(t.TempDir(), "eh-trustd")
+	t.Setenv("EH_ATTESTATION_TRUSTD_PATH", trustdPath)
+	t.Setenv("EH_ATTESTATION_TRUSTD_TIMEOUT_MS", "2500")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +37,46 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if cfg.Attestation.Mode != "required" {
 		t.Fatalf("attestation mode override missed: %q", cfg.Attestation.Mode)
+	}
+	if cfg.Attestation.TrustdPath != trustdPath || cfg.Attestation.TrustdTimeoutMS != 2500 {
+		t.Fatalf("trustd override missed: %+v", cfg.Attestation)
+	}
+}
+
+func TestTrustdTimeoutValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.Attestation.TrustdTimeoutMS = 50
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("short trustd timeout accepted")
+	}
+	cfg.Attestation.TrustdTimeoutMS = 60000
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("long trustd timeout accepted")
+	}
+	cfg.Attestation.TrustdTimeoutMS = 2000
+	cfg.Attestation.TrustdPath = "eh-trustd"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("relative trustd path accepted")
+	}
+}
+
+func TestInvalidTrustdTimeoutEnv(t *testing.T) {
+	t.Setenv("EH_ATTESTATION_TRUSTD_TIMEOUT_MS", "soon")
+	t.Setenv("EH_TLS_CERT", "c.pem")
+	t.Setenv("EH_TLS_KEY", "k.pem")
+	if _, err := Load(""); err == nil {
+		t.Fatal("invalid trustd timeout accepted")
+	}
+}
+
+func TestEmptyTrustdPathEnvDisables(t *testing.T) {
+	t.Setenv("EH_ATTESTATION_TRUSTD_PATH", "")
+	cfg := Default()
+	cfg.Attestation.TrustdPath = "placeholder"
+	applyEnv(cfg)
+	if cfg.Attestation.TrustdPath != "" {
+		t.Fatalf("empty env did not disable trustd: %q", cfg.Attestation.TrustdPath)
 	}
 }
 

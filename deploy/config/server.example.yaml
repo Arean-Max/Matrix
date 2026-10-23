@@ -16,6 +16,8 @@ oob:
 
 attestation:
   mode: auto
+  trustd_path: /usr/local/bin/eh-trustd
+  trustd_timeout_ms: 2000
 
 notify:
   timeout_sec: 5

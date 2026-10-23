@@ -56,6 +56,14 @@ construction gets `/v2`, never a silent edit.
   reach `tpm-attested`; the tier is telemetry, not a hardware boundary.
 - Authentication failures are generic and timing-floored on the two
   unauthenticated endpoints.
+- When `attestation.trustd_path` is set, every TPM structure from a client is
+  parsed and every quote signature is verified in `eh-trustd`, a child process
+  with no sockets, no database handle and no key material. It starts with an
+  empty environment (so it cannot inherit `EH_MASTER_KEY` or other secrets)
+  and reads one JSON request per line on stdin, answering on stdout. It runs
+  as the same service user, so this is isolation of the parser rather than a
+  kernel sandbox. A crash, hang or malformed response fails the request closed
+  and respawns the child. The Docker image enables this by default.
 
 ## What is explicitly not
 
@@ -65,6 +73,18 @@ construction gets `/v2`, never a silent edit.
 - Protection against a malicious server operator: the admin plane is
   all-powerful by design.
 - EK certificate validation (TOFU enrollment instead; ADR-008/019).
+- Boot-integrity enforcement without a baseline: PCRs are compared only when
+  `attestation.expected_pcr_digest` is set. Otherwise a valid quote proves
+  possession of a TPM and AK, not a known-good firmware and boot state.
+- Process isolation for every parse: with `attestation.trustd_path` empty the
+  Go verifier parses in-process, and TPM credential activation
+  (`MakeCredential`) always stays in Go. Both paths are memory-safe Go, but
+  only `eh-trustd` puts the whole quote path behind a process boundary.
+- Non-standard RSA-PSS signatures whose salt length differs from the digest
+  size, AK default schemes other than NULL/RSASSA/RSAPSS/ECDSA, RSA keys below
+  2048 bits, and cross-hash ECDSA pairs: the embedded verifier accepts some of
+  these, `eh-trustd` rejects them. TPM 2.0 hardware uses the accepted shapes;
+  a differential test pins the PSS difference.
 
 ## Deployment hardening checklist
 
@@ -96,6 +116,13 @@ construction gets `/v2`, never a silent edit.
 - [ ] Review `ehctl audits` after onboarding waves; alert on
       `oob.fail` ladders and `session.clone_suspect`.
 - [ ] Keep `security.min_response_floor_ms` ≥ 100 in production.
+- [ ] Run the isolated verifier: set `attestation.trustd_path` (the Docker
+      image sets `EH_ATTESTATION_TRUSTD_PATH=/usr/local/bin/eh-trustd`) and
+      confirm the startup log says `backend=trustd`. The server refuses to
+      start if the configured binary cannot complete a handshake. Install the
+      binary root-owned, mode 755, not writable by the service user. Keep
+      `attestation.trustd_timeout_ms` at 2000 unless the host is heavily
+      oversubscribed.
 
 ## Personal data (GDPR/CCPA notes)
 

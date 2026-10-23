@@ -90,7 +90,7 @@ func buildAttest(name, nonce, pcrDigest []byte) []byte {
 	return b
 }
 
-func rsaSignature(t *testing.T, priv *rsa.PrivateKey, alg uint16, msg []byte) []byte {
+func rsaSignature(t testing.TB, priv *rsa.PrivateKey, alg uint16, msg []byte) []byte {
 	t.Helper()
 	digest := sha256.Sum256(msg)
 	var sig []byte
@@ -112,7 +112,7 @@ func rsaSignature(t *testing.T, priv *rsa.PrivateKey, alg uint16, msg []byte) []
 	return appendSized(b, sig)
 }
 
-func ecdsaSignature(t *testing.T, priv *ecdsa.PrivateKey, msg []byte) []byte {
+func ecdsaSignature(t testing.TB, priv *ecdsa.PrivateKey, msg []byte) []byte {
 	t.Helper()
 	digest := sha256.Sum256(msg)
 	r, s, err := ecdsa.Sign(rand.Reader, priv, digest[:])
@@ -131,7 +131,7 @@ func ecdsaSignature(t *testing.T, priv *ecdsa.PrivateKey, msg []byte) []byte {
 	return appendSized(b, sb)
 }
 
-func nameOf(t *testing.T, area []byte) []byte {
+func nameOf(t testing.TB, area []byte) []byte {
 	t.Helper()
 	pub, err := gotpm.Unmarshal[gotpm.TPMTPublic](area)
 	if err != nil {
@@ -144,7 +144,7 @@ func nameOf(t *testing.T, area []byte) []byte {
 	return n.Buffer
 }
 
-func genRSA(t *testing.T) *rsa.PrivateKey {
+func genRSA(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -153,7 +153,7 @@ func genRSA(t *testing.T) *rsa.PrivateKey {
 	return key
 }
 
-func randBytes(t *testing.T, n int) []byte {
+func randBytes(t testing.TB, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -394,5 +394,26 @@ func TestMakeCredentialRejections(t *testing.T) {
 	}
 	if _, err := MakeCredential([]byte{0x01, 0x02}, akName, randBytes(t, 32)); err == nil {
 		t.Fatal("garbage ek area accepted")
+	}
+}
+
+func TestCheckAKNeverPanics(t *testing.T) {
+	state := uint64(0x9e3779b97f4a7c15)
+	for i := 0; i < 5000; i++ {
+		state = state*6364136223846793005 + 1
+		n := int(state % 512)
+		data := make([]byte, n)
+		for j := range data {
+			state = state*6364136223846793005 + 1
+			data[j] = byte(state >> 32)
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic on input %x: %v", data, r)
+				}
+			}()
+			_, _, _ = CheckAK(data)
+		}()
 	}
 }

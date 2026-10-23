@@ -3,9 +3,10 @@
 ## 1. What this is
 
 A self-hosted software licensing and hardware-attestation system for Windows
-applications. One server binary, one operations CLI, one vendor-side builder,
-one client SDK. The client side is deliberately small and honest about what
-software protection can and cannot do (see `THREAT_MODEL.md`).
+applications. One server binary, one optional trust daemon, one operations CLI,
+one vendor-side builder, one client SDK. The client side is deliberately small
+and honest about what software protection can and cannot do (see
+`THREAT_MODEL.md`).
 
 ## 2. Goals and non-goals
 
@@ -41,12 +42,13 @@ flowchart LR
         SDK --> STATE[(DPAPI-sealed state)]
     end
     SDK -->|"HTTPS + SPKI pin"| API
-    subgraph Server["eh-server (single Go process)"]
+    subgraph Server["eh-server (Go control plane)"]
         API[client API] --> LIC[licensing]
         API --> ATST[attestation]
         ADM[admin API] --> LIC
         LIC --> STORE[(SQLite WAL, field-encrypted)]
         ATST --> STORE
+        LIC -->|"NDJSON over stdin/stdout"| TRUSTD[eh-trustd Rust verifier]
     end
     CTL[ehctl] -->|"Bearer or mTLS"| ADM
     BLD[eh-builder] -.->|"provision file via ehctl"| CTL
@@ -71,9 +73,11 @@ flowchart LR
 │   ├── notify/         # OOB delivery: webhook + manual
 │   ├── ratelimit/      # token buckets keyed per IP/entity with GC
 │   ├── api/            # HTTP transport: routing, middleware, TLS, handlers
+│   ├── trustd/         # client for the isolated Rust TPM verifier
 │   └── packaging/      # .ehpkg container + provision files
 ├── rust/
 │   ├── eh-core/        # the EHVM1 bytecode machine (docs/VM.md)
+│   ├── eh-trustd/      # isolated TPM quote verifier (NDJSON stdin/stdout)
 │   └── eh-client/      # Windows SDK: TBS/TPM2, ureq+rustls, DPAPI state, sessions, C ABI, demo
 ├── deploy/             # Dockerfile, compose, systemd, example configs
 └── docs/               # architecture, protocol, threat model, operations, decisions
@@ -88,6 +92,8 @@ flowchart LR
 | `internal/store` | SQL, migrations, field-level encryption, transactions | implement policy |
 | `internal/licensing` | state machines, quotas, clone policy, heartbeats | speak HTTP |
 | `internal/attestation` | TPM structure parsing, signature verification, credential construction | touch the DB |
+| `internal/trustd` | spawn and talk to `eh-trustd`, map its results to domain types | parse TPM structures itself |
+| `rust/eh-trustd` | parse untrusted TPM data and verify signatures in an isolated process | touch the DB, network or keys |
 | `internal/api` | routing, middleware, TLS, JSON error mapping | implement domain rules |
 | `cmd/*` | flag parsing, wiring, process lifecycle | contain reusable logic |
 
@@ -95,8 +101,15 @@ flowchart LR
 
 - **Server**: one process. `net/http` with explicit timeouts; graceful
   shutdown on SIGINT/SIGTERM; two background janitors (nonce expiry,
-  rate-limiter GC); structured logs (`slog` JSON) to stdout; no external
-  daemons.
+  rate-limiter GC); structured logs (`slog` JSON) to stdout; no network
+  daemons. When `attestation.trustd_path` is set, `eh-server` spawns
+  `eh-trustd`, a stateless verifier that reads one JSON request per line on
+  stdin and writes one JSON response per line on stdout. Every response
+  carries the internal protocol version; a mismatch fails closed. The child
+  has no sockets, no DB handle and no keys; it starts with an empty environment
+  and runs as the same service user, so this isolates the untrusted parse path
+  but is not a kernel sandbox. A crash or timeout kills and respawns it, and
+  the request fails closed.
 - **Client**: a library crate with a synchronous API. All private keys live
   in process memory only. The caller drives heartbeats or uses the built-in
   loop. Local session state (keys, lease deadlines, the unwrapped package
@@ -158,8 +171,10 @@ Encryption policy:
 The layout keeps these splits cheap, and we deliberately did **not** take
 them in v2:
 
-1. `internal/attestation` → its own service when enterprise PCR policies or
-   HSM-backed EK trust are needed.
+1. `internal/attestation` → fully separate service when enterprise PCR policies
+   or HSM-backed EK trust are needed. Quote and AK verification already run in
+   the isolated Rust `eh-trustd`; TPM credential activation remains embedded
+   until its input path is split too.
 2. Admin plane → separate listener/deployment when network policy separates
    ops from client traffic.
 3. `internal/store` → Postgres when a single node is no longer enough
@@ -176,8 +191,8 @@ configuration change, not a rewrite.
 - **Privacy**: zero telemetry; the only egress is webhook OOB delivery if the
   operator configures it.
 - **Supply chain**: small dependency sets — `google/go-tpm`, `x/crypto`,
-  `modernc.org/sqlite` on the server; RustCrypto crates, `ureq`, `rustls`,
-  `webpki-roots` and `windows-sys` on the client. No cgo.
+  `modernc.org/sqlite` on the server; RustCrypto crates, `ring`, `ureq`,
+  `rustls`, `webpki-roots` and `windows-sys` on the Rust side. No cgo.
 - **Performance envelope**: SQLite WAL comfortably handles tens of thousands
   of licenses and 15-minute heartbeats on one core; `/verify` is
   cryptography-bound (Ed25519/RSA verify, no per-request keygen).

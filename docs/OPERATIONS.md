@@ -26,7 +26,34 @@ systemctl daemon-reload && systemctl enable --now eh-server
 ```
 
 **Docker.** See `deploy/docker-compose.yml`; the container includes an
-`eh-server -health-check` probe.
+`eh-server -health-check` probe and ships `eh-trustd` at
+`/usr/local/bin/eh-trustd` with `EH_ATTESTATION_TRUSTD_PATH` preset.
+
+**Isolated TPM verifier (systemd/custom installs).** Build the Rust daemon
+and point the server at it:
+
+```sh
+cargo build --locked --release --manifest-path rust/Cargo.toml -p eh-trustd
+install -o root -g root -m 755 rust/target/release/eh-trustd /usr/local/bin/eh-trustd
+# /etc/eh/server.yaml
+# attestation:
+#   trustd_path: /usr/local/bin/eh-trustd
+#   trustd_timeout_ms: 2000
+```
+
+`eh-server` spawns the daemon on startup, requires a successful `ping`, and
+logs `attestation verifier backend=trustd path=...`. The path must be
+absolute, so a stray `PATH` entry cannot be picked up. The daemon has no
+sockets, no database and no keys, and starts with an empty environment: it
+inherits neither `EH_MASTER_KEY` nor any other server secret. It reads one
+JSON line per request on stdin and answers on stdout; every response carries
+the internal protocol version, and a mismatch fails the request. A crash,
+timeout or malformed response fails the attestation request closed; the next
+request respawns it. Install the binary root-owned and not writable by the
+service user: it decides whether quotes are valid. Leave `trustd_path` empty
+for embedded mode (single binary, no child process). The unit file needs no
+change: the child inherits the service sandbox. In the Docker image, run with
+`EH_ATTESTATION_TRUSTD_PATH=` (empty) to force embedded mode.
 
 **Master key.** Set `EH_MASTER_KEY` (64 hex chars) or
 `EH_MASTER_KEY_FILE`. If neither is set and `<data_dir>/eh.db` does not exist,
@@ -212,6 +239,9 @@ not erase its audit rows).
   `ehctl tokens revoke <old-id>`. Zero downtime.
 - **TLS certificates**: replace files and restart the server (hot reload is
   not implemented on purpose — it is a one-line restart).
+- **Trust daemon**: rebuild `eh-trustd`, replace the binary, restart the
+  server. The embedded and Rust verifiers are interchangeable; the wire
+  protocol does not change.
 - **Package keys**: re-pack payloads with `eh-builder`; package ids are
   independent, old packages stay verifiable until revoked.
 - **Master key**: **not rotatable in v2.** Rotating it would invalidate all
@@ -235,6 +265,9 @@ not erase its audit rows).
 | `reset_cooldown` | single-device license reset less than `reset_hwid.cooldown_days` ago | wait for `retry_after_s`; a support reset is `ehctl license clear-resets` + `resume` |
 | `reset_quota` | all automatic HWID resets consumed; license is suspended | verify the hardware change, then `ehctl license clear-resets <id>` + `ehctl license resume <id> --reason ...` |
 | `protocol_unsupported` | client omitted `X-EH-Protocol` or sent an unsupported version | upgrade the client; downgrade is intentionally unsupported |
+| Startup fails with `attestation verifier: trustd: ...` | `attestation.trustd_path` is set but the binary is missing, not executable, or did not answer `ping` | fix the path/permissions; the server intentionally refuses to start rather than silently using another verifier |
+| Attestations fail with `trustd:` in the log while `attestation.mode: required` | the daemon was killed/updated, timed out, or rejected a non-standard signature | check the server log for the daemon error; the request fails closed. Identity of the binary matters: rebuild from this tree, do not substitute another tool |
+| Log says `backend=embedded` after configuring trustd | the path came from YAML/env but the server restarted without it, or the key is misspelled | check `EH_ATTESTATION_TRUSTD_PATH` and `attestation.trustd_path`; `KnownFields` rejects unknown YAML keys, so a typo fails startup |
 | Client state lost or corrupt (`client.state`) | data dir wiped, DPAPI user changed, or copied from another machine | SDK drops the saved session and re-verifies online; keep the data dir for offline continuity |
 | Server: `TLS handshake error` from Schannel/old clients | client TLS stack rejects the cert (private CA) | use the supplied CA or a chain clients trust |
 

@@ -99,3 +99,12 @@ go test ./...            # server: unit + full HTTP integration
 go test -race ./...      # same under the race detector (needs gcc)
 cd rust && cargo test    # VM + client + trustd (crypto, http, state, tpm parsing)
 ```
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

@@ -5,7 +5,7 @@ members = ["eh-core", "eh-client", "eh-trustd"]
 [workspace.package]
 version = "2.0.0"
 edition = "2021"
-license = "proprietary"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 sha2 = "0.10"

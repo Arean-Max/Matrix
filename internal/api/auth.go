@@ -19,7 +19,7 @@ type adminHandler func(w http.ResponseWriter, r *http.Request, actor string)
 
 func (s *Server) admin(minRole string, next adminHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if ok, retry := s.ip.AllowRetry("admin:"+clientIP(r), 60, 60); !ok {
+		if ok, retry := s.ip.AllowRetry("admin:"+s.clientIP(r), 60, 60); !ok {
 			writeRateLimited(w, r, retry)
 			return
 		}
@@ -28,10 +28,10 @@ func (s *Server) admin(minRole string, next adminHandler) http.HandlerFunc {
 			if errors.Is(err, errUnauthenticated) {
 				// Cap auth.fail rows per source so a distributed password
 				// spray cannot grow the audit table without bound.
-				if ok, _ := s.ip.AllowRetry("authfail:"+clientIP(r), 1.0/60, 5); ok {
+				if ok, _ := s.ip.AllowRetry("authfail:"+s.clientIP(r), 1.0/60, 5); ok {
 					if auditErr := s.store.AddAudit(&store.Audit{
 						TS: s.now().Unix(), Actor: "unknown", Action: store.AuditAuthFail,
-						Detail: clientIP(r),
+						Detail: s.clientIP(r),
 					}); auditErr != nil {
 						s.log.Error("audit auth failure", "error", auditErr)
 					}
@@ -118,10 +118,52 @@ func (s *Server) mtlsAdmin(cn string) bool {
 	return false
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+func (s *Server) clientIP(r *http.Request) string {
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		remoteHost = r.RemoteAddr
 	}
-	return host
+	if len(s.trustedNets) == 0 && len(s.trustedIPs) == 0 {
+		return remoteHost
+	}
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil || !s.isTrustedProxy(remoteIP) {
+		return remoteHost
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ipStr := strings.TrimSpace(parts[i])
+			ip := net.ParseIP(ipStr)
+			if ip != nil && !s.isTrustedProxy(ip) {
+				return ipStr
+			}
+		}
+		if len(parts) > 0 {
+			first := strings.TrimSpace(parts[0])
+			if net.ParseIP(first) != nil {
+				return first
+			}
+		}
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		if net.ParseIP(xri) != nil {
+			return xri
+		}
+	}
+	return remoteHost
+}
+
+func (s *Server) isTrustedProxy(ip net.IP) bool {
+	for _, tip := range s.trustedIPs {
+		if tip.Equal(ip) {
+			return true
+		}
+	}
+	for _, tnet := range s.trustedNets {
+		if tnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

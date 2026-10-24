@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
-	if ok, retry := s.ip.AllowRetry("challenge:"+clientIP(r), 30, 30); !ok {
+	if ok, retry := s.ip.AllowRetry("challenge:"+s.clientIP(r), 30, 30); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}
@@ -38,7 +38,7 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	if ok, retry := s.ip.AllowRetry("verify:"+clientIP(r), 30, 30); !ok {
+	if ok, retry := s.ip.AllowRetry("verify:"+s.clientIP(r), 30, 30); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}
@@ -73,7 +73,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if ok, retry := s.ip.AllowRetry("hb:"+clientIP(r), 60, 60); !ok {
+	if ok, retry := s.ip.AllowRetry("hb:"+s.clientIP(r), 60, 60); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}

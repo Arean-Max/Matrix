@@ -14,6 +14,7 @@ type Config struct {
 	Clone                Clone       `yaml:"clone"`
 	Reset                ResetHWID   `yaml:"reset_hwid"`
 	Retention            Retention   `yaml:"retention"`
+	LogLevel             string      `yaml:"log_level"`
 }
 
 type TLS struct {
@@ -48,6 +49,7 @@ type Security struct {
 	SupersedeGraceSec  int      `yaml:"supersede_grace_s"`
 	MinResponseFloorMS int      `yaml:"min_response_floor_ms"`
 	MTLSAdminCNs       []string `yaml:"mtls_admin_cns"`
+	TrustedProxies     []string `yaml:"trusted_proxies"`
 }
 
 type Retention struct {
@@ -91,5 +93,6 @@ func Default() *Config {
 			SessionDays: 90,
 			DeviceDays:  180,
 		},
+		LogLevel: "info",
 	}
 }

@@ -34,14 +34,14 @@ func TestActivateOOBFlow(t *testing.T) {
 		wrong = "99999999"
 	}
 	e := wantErr(t, func() error {
-		_, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, testNow)
+		_, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, testNow)
 		return err
 	}(), wire.CodeInvalidCode)
 	if e.Details["attempts_remaining"] != 4 {
 		t.Fatalf("details = %+v", e.Details)
 	}
 
-	out, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, testNow)
+	out, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestActivateOOBFlow(t *testing.T) {
 		t.Fatalf("re-activate = %+v, %v", resp, err)
 	}
 
-	_, err = srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, testNow)
+	_, err = srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, testNow)
 	wantErr(t, err, wire.CodeOOBExpired)
 
 	audits, err := srv.ListAudits(lic.ID, "", 0, 100)
@@ -100,26 +100,26 @@ func TestOOBBruteForceLadder(t *testing.T) {
 	}
 
 	for i := 1; i <= 4; i++ {
-		_, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
+		_, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
 		e := wantErr(t, err, wire.CodeInvalidCode)
 		if e.Details["attempts_remaining"] != 5-i {
 			t.Fatalf("attempt %d, details = %+v", i, e.Details)
 		}
 	}
 
-	_, err = srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
+	_, err = srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
 	e := wantErr(t, err, wire.CodeCodeLocked)
 	if e.RetryAfterS != 300 {
 		t.Fatalf("retry after = %d, want 300", e.RetryAfterS)
 	}
 
-	_, err = srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+1)
+	_, err = srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+1)
 	wantErr(t, err, wire.CodeCodeLocked)
 
 	if _, err := srv.Activate(ctx, &wire.ActivateRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA}, now+2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+3); err == nil {
+	if _, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+3); err == nil {
 		t.Fatal("lock was not persisted")
 	}
 
@@ -129,7 +129,7 @@ func TestOOBBruteForceLadder(t *testing.T) {
 	}{{301, 600}, {601, 1200}, {1201, 2400}, {2401, 3600}}
 	for _, step := range steps {
 		now += step.step
-		_, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
+		_, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
 		e := wantErr(t, err, wire.CodeCodeLocked)
 		if e.RetryAfterS != step.want {
 			t.Fatalf("step %d: retry after = %d, want %d", step.step, e.RetryAfterS, step.want)
@@ -137,7 +137,7 @@ func TestOOBBruteForceLadder(t *testing.T) {
 	}
 
 	now += 3601
-	_, err = srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
+	_, err = srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now)
 	e = wantErr(t, err, wire.CodeCodeLocked)
 	if e.RetryAfterS != 86400 {
 		t.Fatalf("retry after = %d, want 86400", e.RetryAfterS)
@@ -146,12 +146,12 @@ func TestOOBBruteForceLadder(t *testing.T) {
 	if err := srv.UnlockOOB(lic.ID, "admin", now); err != nil {
 		t.Fatal(err)
 	}
-	_, err = srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now+1)
+	_, err = srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: wrong}, now+1)
 	e = wantErr(t, err, wire.CodeInvalidCode)
 	if e.Details["attempts_remaining"] != 4 {
 		t.Fatalf("after unlock, details = %+v", e.Details)
 	}
-	if _, err := srv.VerifyOOB(&wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+2); err != nil {
+	if _, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: view.Code}, now+2); err != nil {
 		t.Fatalf("right code after unlock: %v", err)
 	}
 }

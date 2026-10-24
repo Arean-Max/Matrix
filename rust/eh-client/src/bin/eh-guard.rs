@@ -2,10 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eh_client::guard::GuardConfig;
 use eh_client::{Activation, Client, Config, Error};
@@ -68,6 +66,18 @@ fn parse_args() -> Result<Args, String> {
         code,
         child_args,
     })
+}
+
+struct StagedFileGuard {
+    path: PathBuf,
+}
+
+impl Drop for StagedFileGuard {
+    fn drop(&mut self) {
+        if self.path.exists() {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -166,7 +176,8 @@ fn main() -> ExitCode {
         }
     }
 
-    let (exec_path, is_staged) = if guard_cfg.package_file.is_some() {
+    let mut _file_guard: Option<StagedFileGuard> = None;
+    let exec_path = if guard_cfg.package_file.is_some() {
         let payload = match client.payload() {
             Some(p) => p,
             None => {
@@ -174,7 +185,9 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let staging_dir = guard_cfg.staging_dir.clone().unwrap_or_else(env::temp_dir);
+        let staging_dir = guard_cfg.staging_dir.clone().unwrap_or_else(|| {
+            env::temp_dir().join(format!(".eh_stage_{}", std::process::id()))
+        });
         let _ = fs::create_dir_all(&staging_dir);
         use rand::RngCore;
         let mut nonce = [0u8; 8];
@@ -185,9 +198,12 @@ fn main() -> ExitCode {
             eprintln!("eh-guard: failed to write staged executable: {e}");
             return ExitCode::from(1);
         }
-        (staged_file, true)
+        _file_guard = Some(StagedFileGuard {
+            path: staged_file.clone(),
+        });
+        staged_file
     } else {
-        (guard_cfg.executable.clone().unwrap(), false)
+        guard_cfg.executable.clone().unwrap()
     };
 
     let mut cmd = Command::new(&exec_path);
@@ -205,18 +221,46 @@ fn main() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             eprintln!("eh-guard: failed to spawn child process: {e}");
-            if is_staged {
-                let _ = fs::remove_file(&exec_path);
-            }
             return ExitCode::from(1);
         }
     };
 
-    let status = child.wait();
+    let interval_s = client
+        .session()
+        .map(|s| s.heartbeat_interval_s.max(5) as u64)
+        .unwrap_or(60);
+    let kill_on_expiry = guard_cfg.kill_on_lease_expiry;
 
-    if is_staged {
-        let _ = fs::remove_file(&exec_path);
-    }
+    let mut last_hb = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {}
+            Err(e) => break Err(e),
+        }
+
+        if last_hb.elapsed() >= Duration::from_secs(interval_s) {
+            match client.heartbeat() {
+                Ok(()) => {
+                    last_hb = Instant::now();
+                }
+                Err(e) => {
+                    let offline_ok = client.usable_offline();
+                    if !offline_ok || matches!(e, Error::SessionLost(_)) {
+                        eprintln!("eh-guard: session expired or revoked ({e}); terminating protected process");
+                        if kill_on_expiry {
+                            let _ = child.kill();
+                        }
+                        let _ = child.wait();
+                        return ExitCode::from(1);
+                    }
+                    last_hb = Instant::now();
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(150));
+    };
 
     match status {
         Ok(s) => ExitCode::from(s.code().unwrap_or(0) as u8),

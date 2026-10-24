@@ -90,7 +90,7 @@ func activateTrusted(t *testing.T, s *Service, lic *wire.LicenseCreateResponse, 
 	if !wire.ValidCode(view.Code) {
 		t.Fatalf("revealed code %q is not 8 digits", view.Code)
 	}
-	out, err := s.VerifyOOB(&wire.VerifyOOBRequest{
+	out, err := s.VerifyOOB(context.Background(), &wire.VerifyOOBRequest{
 		LicenseKey: lic.LicenseKey, Fingerprint: fp, Code: view.Code,
 	}, now)
 	if err != nil {

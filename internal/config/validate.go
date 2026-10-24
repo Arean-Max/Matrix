@@ -36,6 +36,20 @@ func (c *Config) Validate() error {
 			return errors.New("security.mtls_admin_cns contains an empty name")
 		}
 	}
+	for _, proxy := range c.Security.TrustedProxies {
+		trimmed := strings.TrimSpace(proxy)
+		if trimmed == "" {
+			return errors.New("security.trusted_proxies contains an empty entry")
+		}
+		if _, _, err := net.ParseCIDR(trimmed); err != nil && net.ParseIP(trimmed) == nil {
+			return fmt.Errorf("security.trusted_proxies entry %q is not a valid IP or CIDR", proxy)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("log_level %q: want debug, info, warn or error", c.LogLevel)
+	}
 	switch c.Attestation.Mode {
 	case "auto", "required", "off":
 	default:

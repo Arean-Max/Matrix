@@ -27,11 +27,15 @@ notify:
   # Required for webhook delivery and for licenses with a webhook: channel:
   # webhook_secret: replace-with-a-random-secret
 
+log_level: info
+
 security:
   supersede_grace_s: 300
   min_response_floor_ms: 150
   # Required with tls.client_ca_file; other certificates fall back to bearer auth:
   # mtls_admin_cns: ["ehctl-admin"]
+  # Optional CIDRs for reverse proxies (extracts real client IP from X-Forwarded-For):
+  # trusted_proxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
 clone:
   action: flag

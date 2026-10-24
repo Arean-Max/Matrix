@@ -2,6 +2,8 @@ package api
 
 import (
 	"log/slog"
+	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +29,9 @@ type Server struct {
 	useMTLS      bool
 	backend      string
 	stopGC       []func()
+
+	trustedNets []*net.IPNet
+	trustedIPs  []net.IP
 }
 
 func New(svc *licensing.Service, st *store.Store, cfg *config.Config, bootstrapToken string, log *slog.Logger) *Server {
@@ -46,6 +51,14 @@ func New(svc *licensing.Service, st *store.Store, cfg *config.Config, bootstrapT
 		bootstrap: bootstrapToken,
 		useMTLS:   cfg.TLS.ClientCAFile != "",
 		backend:   backend,
+	}
+	for _, entry := range cfg.Security.TrustedProxies {
+		trimmed := strings.TrimSpace(entry)
+		if _, ipnet, err := net.ParseCIDR(trimmed); err == nil {
+			s.trustedNets = append(s.trustedNets, ipnet)
+		} else if ip := net.ParseIP(trimmed); ip != nil {
+			s.trustedIPs = append(s.trustedIPs, ip)
+		}
 	}
 	s.stopGC = append(s.stopGC, s.ip.StartGC(5*time.Minute, 15*time.Minute))
 	s.stopGC = append(s.stopGC, s.account.StartGC(5*time.Minute, 30*time.Minute))

@@ -269,7 +269,7 @@ func TestRevokedDeviceNeedsRelease(t *testing.T) {
 	} else {
 		wantErr(t, err, wire.CodeInvalidLicense)
 	}
-	if _, err := srv.VerifyOOB(&wire.VerifyOOBRequest{
+	if _, err := srv.VerifyOOB(ctx, &wire.VerifyOOBRequest{
 		LicenseKey: lic.LicenseKey, Fingerprint: fpA, Code: "12345678",
 	}, testNow+12); err == nil {
 		t.Fatal("revoked device could verify an OOB code")

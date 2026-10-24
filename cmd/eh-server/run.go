@@ -22,10 +22,13 @@ import (
 	"eventhorizon/internal/version"
 )
 
-func run(configPath string, log *slog.Logger) error {
+func run(configPath string, log *slog.Logger, levelVar *slog.LevelVar, cliLogLevel string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
+	}
+	if cliLogLevel == "" && cfg.LogLevel != "" && levelVar != nil {
+		levelVar.Set(parseLogLevel(cfg.LogLevel, ""))
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)

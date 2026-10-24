@@ -82,7 +82,10 @@ func oobLockSeconds(attempts, threshold int) int {
 	return lock
 }
 
-func (s *Service) VerifyOOB(req *wire.VerifyOOBRequest, now int64) (*wire.VerifyOOBResponse, error) {
+func (s *Service) VerifyOOB(ctx context.Context, req *wire.VerifyOOBRequest, now int64) (*wire.VerifyOOBResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	l, err := s.licenseByKey(req.LicenseKey)
 	if err != nil {
 		return nil, err

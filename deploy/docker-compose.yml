@@ -9,8 +9,6 @@ services:
       - "8443:8443"
     volumes:
       - eh-data:/var/lib/eh
-      - eh-data:/data
-
       - ./config/server.yaml:/etc/eh/server.yaml:ro
       - ./tls:/etc/eh/tls:ro
 

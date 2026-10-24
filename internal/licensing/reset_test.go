@@ -49,7 +49,7 @@ func TestResetHWIDFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.VerifyOOB(&wire.VerifyOOBRequest{
+	_, err = s.VerifyOOB(ctx, &wire.VerifyOOBRequest{
 		LicenseKey: lic.LicenseKey, Fingerprint: fpD, Code: view.Code,
 	}, now+172901)
 	wantErr(t, err, wire.CodeResetQuota)

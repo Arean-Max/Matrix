@@ -22,7 +22,7 @@ func licenseLimitKey(key string) string {
 func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	defer s.floor(start)
-	if ok, retry := s.ip.AllowRetry("activate:"+clientIP(r), 5, 5); !ok {
+	if ok, retry := s.ip.AllowRetry("activate:"+s.clientIP(r), 5, 5); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}
@@ -56,7 +56,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVerifyOOB(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	defer s.floor(start)
-	if ok, retry := s.ip.AllowRetry("verifyoob:"+clientIP(r), 5, 5); !ok {
+	if ok, retry := s.ip.AllowRetry("verifyoob:"+s.clientIP(r), 5, 5); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}
@@ -83,7 +83,7 @@ func (s *Server) handleVerifyOOB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.svc.VerifyOOB(&req, s.now().Unix())
+	resp, err := s.svc.VerifyOOB(r.Context(), &req, s.now().Unix())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -94,7 +94,7 @@ func (s *Server) handleVerifyOOB(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResetHWID(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	defer s.floor(start)
-	if ok, retry := s.ip.AllowRetry("resethwid:"+clientIP(r), 5, 5); !ok {
+	if ok, retry := s.ip.AllowRetry("resethwid:"+s.clientIP(r), 5, 5); !ok {
 		writeRateLimited(w, r, retry)
 		return
 	}

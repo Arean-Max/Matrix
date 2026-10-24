@@ -40,14 +40,58 @@ func (s *Store) DeviceByID(id string) (*Device, error) {
 }
 
 func (s *Store) BindDevice(licenseID, fp, id string, keep int, now int64, pol ResetPolicy) (*Device, int, error) {
-	if keep < 1 {
-		keep = 1
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer tx.Rollback()
+	d, released, err := bindDeviceTx(tx, licenseID, fp, id, keep, now, pol)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return d, released, nil
+}
+
+// BindDeviceWithOOB binds a device and consumes the out-of-band code in the
+// same transaction. A failed bind (cooldown, quota, database error) leaves the
+// code unconsumed.
+func (s *Store) BindDeviceWithOOB(licenseID, fp, id, oobID string, keep int, now int64, pol ResetPolicy) (*Device, int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE oob_codes SET consumed_at = ?
+		WHERE id = ? AND consumed_at = 0 AND expires_at > ?`, now, oobID, now)
+	if err != nil {
+		return nil, 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, 0, ErrNotFound
+	}
+	if _, err := tx.Exec(`INSERT INTO oob_state(license_id, fingerprint, attempts, locked_until)
+		VALUES(?,?,0,0)
+		ON CONFLICT(license_id, fingerprint) DO UPDATE SET attempts = 0, locked_until = 0`,
+		licenseID, fp); err != nil {
+		return nil, 0, err
+	}
+	d, released, err := bindDeviceTx(tx, licenseID, fp, id, keep, now, pol)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return d, released, nil
+}
+
+func bindDeviceTx(tx *sql.Tx, licenseID, fp, id string, keep int, now int64, pol ResetPolicy) (*Device, int, error) {
+	if keep < 1 {
+		keep = 1
+	}
 	var others int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices
 		WHERE license_id = ? AND fingerprint <> ? AND status = ?`,
@@ -87,7 +131,7 @@ func (s *Store) BindDevice(licenseID, fp, id string, keep int, now int64, pol Re
 	if err != nil {
 		return nil, 0, err
 	}
-	return d, released, tx.Commit()
+	return d, released, nil
 }
 
 func applyResetQuota(tx *sql.Tx, licenseID string, now int64, pol ResetPolicy) error {
@@ -108,36 +152,38 @@ func applyResetQuota(tx *sql.Tx, licenseID string, now int64, pol ResetPolicy) e
 	return err
 }
 
-func (s *Store) ResetLicenseDevices(licenseID string, now int64, pol ResetPolicy) (int, error) {
+// ResetDevice releases one device identified by its fingerprint. It never
+// releases other devices of the same license; that is an admin action.
+func (s *Store) ResetDevice(licenseID, fp string, now int64, pol ResetPolicy) (int, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	var trusted int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE license_id = ? AND status = ?`,
-		licenseID, DeviceTrusted).Scan(&trusted); err != nil {
-		return 0, err
-	}
-	if trusted == 0 {
+	var deviceID string
+	err = tx.QueryRow(`SELECT id FROM devices
+		WHERE license_id = ? AND fingerprint = ? AND status = ?`,
+		licenseID, fp, DeviceTrusted).Scan(&deviceID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, tx.Commit()
+	}
+	if err != nil {
+		return 0, err
 	}
 	if pol.Enforce {
 		if err := applyResetQuota(tx, licenseID, now, pol); err != nil {
 			return 0, err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE devices SET status = ?, last_seen_at = ?
-		WHERE license_id = ? AND status = ?`,
-		DeviceReleased, now, licenseID, DeviceTrusted); err != nil {
+	if _, err := tx.Exec(`UPDATE devices SET status = ?, last_seen_at = ? WHERE id = ?`,
+		DeviceReleased, now, deviceID); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET status = ?
-		WHERE device_id IN (SELECT id FROM devices WHERE license_id = ?)`,
-		SessionRevoked, licenseID); err != nil {
+	if _, err := tx.Exec(`UPDATE sessions SET status = ? WHERE device_id = ?`,
+		SessionRevoked, deviceID); err != nil {
 		return 0, err
 	}
-	return trusted, tx.Commit()
+	return 1, tx.Commit()
 }
 
 func (s *Store) ClearResetCounters(licenseID string) (int, error) {
@@ -184,9 +230,16 @@ func (s *Store) SetDeviceStatus(id, status string, now int64) error {
 	return tx.Commit()
 }
 
-func (s *Store) DevicesByLicense(licenseID string) ([]*Device, error) {
+func (s *Store) DevicesByLicense(licenseID string, limit, offset int) ([]*Device, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.db.Query(`SELECT `+deviceCols+` FROM devices
-		WHERE (? = '' OR license_id = ?) ORDER BY bound_at DESC`, licenseID, licenseID)
+		WHERE (? = '' OR license_id = ?) ORDER BY bound_at DESC, id DESC LIMIT ? OFFSET ?`,
+		licenseID, licenseID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +253,22 @@ func (s *Store) DevicesByLicense(licenseID string) ([]*Device, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) CountDevicesByLicense(licenseID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE (? = '' OR license_id = ?)`,
+		licenseID, licenseID).Scan(&n)
+	return n, err
+}
+
+func (s *Store) DeleteOldDevices(cutoff int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM devices
+		WHERE status IN (?, ?) AND last_seen_at < ?`, DeviceReleased, DeviceRevoked, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) CountDevices() (int, error) {

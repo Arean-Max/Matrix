@@ -146,18 +146,12 @@ func (s *Service) VerifyOOB(req *wire.VerifyOOBRequest, now int64) (*wire.Verify
 		}
 	}
 
-	if err := s.store.ConsumeOOB(pending.ID, now); err != nil {
+	pol := s.resetPolicy(l)
+	bound, released, err := s.store.BindDeviceWithOOB(l.ID, req.Fingerprint, cryptox.RandomHex(16), pending.ID, l.MaxDevices, now, pol)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, errf(wire.CodeOOBExpired, "code already used")
 		}
-		return nil, err
-	}
-	if err := s.store.SetOOBState(l.ID, req.Fingerprint, 0, 0); err != nil {
-		return nil, err
-	}
-	pol := s.resetPolicy(l)
-	bound, released, err := s.store.BindDevice(l.ID, req.Fingerprint, cryptox.RandomHex(16), l.MaxDevices, now, pol)
-	if err != nil {
 		return nil, s.resetError(l, err, now)
 	}
 	s.audit(store.AuditDeviceBind, "client", l.ID, bound.ID, "", now)

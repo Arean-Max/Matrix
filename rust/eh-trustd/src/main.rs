@@ -167,23 +167,85 @@ fn handle(line: &str) -> Response {
     }
 }
 
+enum Line {
+    Ok(String),
+    TooLong,
+}
+
+// next_line never allocates more than `max` bytes for one request, even when
+// the peer sends a line without a newline.
+fn next_line<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<Option<Line>> {
+    let mut buf = Vec::new();
+    let mut too_long = false;
+    loop {
+        let (n, pos) = {
+            let chunk = r.fill_buf()?;
+            if chunk.is_empty() {
+                if buf.is_empty() && !too_long {
+                    return Ok(None);
+                }
+                break;
+            }
+            let pos = chunk.iter().position(|&b| b == b'\n');
+            let n = pos.map(|p| p + 1).unwrap_or(chunk.len());
+            if let Some(p) = pos {
+                if !too_long {
+                    if buf.len() + p > max {
+                        too_long = true;
+                    } else {
+                        buf.extend_from_slice(&chunk[..p]);
+                    }
+                }
+            } else if !too_long {
+                if buf.len() + chunk.len() > max {
+                    too_long = true;
+                    buf.clear();
+                } else {
+                    buf.extend_from_slice(chunk);
+                }
+            }
+            (n, pos)
+        };
+        r.consume(n);
+        if pos.is_some() {
+            break;
+        }
+    }
+    if too_long {
+        return Ok(Some(Line::TooLong));
+    }
+    match String::from_utf8(buf) {
+        Ok(s) => Ok(Some(Line::Ok(s))),
+        Err(_) => Ok(Some(Line::TooLong)),
+    }
+}
+
 fn main() {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(line) => line,
+    let mut input = stdin.lock();
+    loop {
+        let line = match next_line(&mut input, MAX_LINE) {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
             Err(_) => break,
         };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let response = if line.len() > MAX_LINE {
-            Response::error("request is too large")
-        } else {
-            handle(&line)
+        let line = match line {
+            Line::Ok(line) if line.trim().is_empty() => continue,
+            Line::Ok(line) => line,
+            Line::TooLong => {
+                let response = Response::error("request is too large");
+                if serde_json::to_writer(&mut out, &response).is_err()
+                    || out.write_all(b"\n").is_err()
+                    || out.flush().is_err()
+                {
+                    break;
+                }
+                continue;
+            }
         };
+        let response = handle(&line);
         if serde_json::to_writer(&mut out, &response).is_err() {
             break;
         }

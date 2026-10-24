@@ -16,6 +16,8 @@ use crate::wire::{self, ErrorBody};
 #[derive(Clone)]
 pub struct HttpConfig {
     pub base: String,
+    /// Custom CA bundle. When set, it replaces the public webpki roots; add
+    /// any public roots you still need to this bundle.
     pub ca_pem: Option<Vec<u8>>,
     pub spki_pin: Option<[u8; 32]>,
     pub timeout: Duration,
@@ -158,13 +160,14 @@ fn parse_pem_certs(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
 
 fn build_client_config(cfg: &HttpConfig) -> Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(pem) = &cfg.ca_pem {
         for cert in parse_pem_certs(pem)? {
             roots
                 .add(cert)
                 .map_err(|e| Error::Config(format!("CA file: {e}")))?;
         }
+    } else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let inner = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())

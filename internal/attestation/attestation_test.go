@@ -99,7 +99,8 @@ func rsaSignature(t testing.TB, priv *rsa.PrivateKey, alg uint16, msg []byte) []
 	case 0x0014:
 		sig, err = rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, digest[:])
 	case 0x0016:
-		sig, err = rsa.SignPSS(rand.Reader, priv, crypto.SHA256, digest[:], nil)
+		sig, err = rsa.SignPSS(rand.Reader, priv, crypto.SHA256, digest[:],
+			&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
 	default:
 		t.Fatalf("bad rsa sig alg 0x%x", alg)
 	}

@@ -5,8 +5,13 @@ import (
 	"eventhorizon/internal/wire"
 )
 
-func (s *Service) ListDevices(licenseID string) (*wire.DeviceListResponse, error) {
-	ds, err := s.store.DevicesByLicense(licenseID)
+func (s *Service) ListDevices(licenseID string, limit, offset int) (*wire.DeviceListResponse, error) {
+	limit, offset = pageArgs(limit, offset)
+	ds, err := s.store.DevicesByLicense(licenseID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	total, err := s.store.CountDevicesByLicense(licenseID)
 	if err != nil {
 		return nil, err
 	}
@@ -18,7 +23,7 @@ func (s *Service) ListDevices(licenseID string) (*wire.DeviceListResponse, error
 			BoundAt: d.BoundAt, LastSeenAt: d.LastSeenAt,
 		})
 	}
-	return &wire.DeviceListResponse{Devices: views}, nil
+	return &wire.DeviceListResponse{Devices: views, Total: total}, nil
 }
 
 func (s *Service) RevokeDevice(deviceID, actor string, now int64) error {

@@ -8,6 +8,24 @@ import (
 	"eventhorizon/internal/cryptox"
 )
 
+func TestNonceCapsEvictOldest(t *testing.T) {
+	s, _ := testStore(t)
+	l := newLicense(t, s)
+	for i := 0; i < 5; i++ {
+		n := &Nonce{
+			Nonce: cryptox.RandomHex(32), LicenseID: l.ID, Fingerprint: fpA,
+			ActivationSecret: cryptox.Random(32), ExpiresAt: int64(2000 + i),
+		}
+		if err := s.CreateNonceCapped(n, 1000, 2, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := s.CountPendingNoncesFor(l.ID, fpA, 1000)
+	if err != nil || pending != 2 {
+		t.Fatalf("pending nonces = %d, %v; want 2", pending, err)
+	}
+}
+
 func TestNonceSingleUse(t *testing.T) {
 	s, _ := testStore(t)
 	l := newLicense(t, s)

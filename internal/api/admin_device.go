@@ -3,7 +3,10 @@ package api
 import "net/http"
 
 func (s *Server) adminListDevices(w http.ResponseWriter, r *http.Request, actor string) {
-	resp, err := s.svc.ListDevices(r.URL.Query().Get("license_id"))
+	q := r.URL.Query()
+	limit := queryInt(q.Get("limit"), 50)
+	offset := queryInt(q.Get("offset"), 0)
+	resp, err := s.svc.ListDevices(q.Get("license_id"), limit, offset)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

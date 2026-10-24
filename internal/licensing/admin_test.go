@@ -43,7 +43,7 @@ func TestAdminLifecycle(t *testing.T) {
 		wantErr(t, err, wire.CodeOOBRequired)
 	}
 
-	devices, err := srv.ListDevices(lic.ID)
+	devices, err := srv.ListDevices(lic.ID, 50, 0)
 	if err != nil || len(devices.Devices) != 2 {
 		t.Fatalf("devices = %+v, %v", devices, err)
 	}
@@ -254,7 +254,7 @@ func TestRevokedDeviceNeedsRelease(t *testing.T) {
 	lic := createLicense(t, srv, testNow)
 	activateTrusted(t, srv, lic, fpA, testNow)
 
-	devices, err := srv.ListDevices(lic.ID)
+	devices, err := srv.ListDevices(lic.ID, 50, 0)
 	if err != nil || len(devices.Devices) != 1 {
 		t.Fatalf("devices = %+v, %v", devices, err)
 	}

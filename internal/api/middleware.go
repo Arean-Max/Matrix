@@ -45,6 +45,11 @@ func (s *Server) common(next http.Handler) http.Handler {
 		}()
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=15552000")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

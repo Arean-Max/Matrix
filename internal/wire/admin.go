@@ -56,6 +56,7 @@ type DeviceView struct {
 
 type DeviceListResponse struct {
 	Devices []DeviceView `json:"devices"`
+	Total   int          `json:"total"`
 }
 
 type PackageImportRequest struct {

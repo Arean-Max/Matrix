@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 type License struct {
@@ -75,9 +76,9 @@ func (s *Store) SetLicenseStatus(id, status, reason string, now int64) error {
 func (s *Store) ListLicenses(status, query string, limit, offset int) ([]*License, error) {
 	rows, err := s.db.Query(`SELECT `+licenseCols+` FROM licenses
 		WHERE (? = '' OR status = ?)
-		  AND (? = '' OR customer LIKE '%'||?||'%' OR note LIKE '%'||?||'%' OR id LIKE '%'||?||'%')
+		  AND (? = '' OR customer LIKE ? ESCAPE '\' OR note LIKE ? ESCAPE '\' OR id LIKE ? ESCAPE '\')
 		ORDER BY created_at DESC, id LIMIT ? OFFSET ?`,
-		status, status, query, query, query, query, limit, offset)
+		status, status, query, likePattern(query), likePattern(query), likePattern(query), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +94,79 @@ func (s *Store) ListLicenses(status, query string, limit, offset int) ([]*Licens
 	return out, rows.Err()
 }
 
+func likePattern(q string) string {
+	q = strings.ReplaceAll(q, `\`, `\\`)
+	q = strings.ReplaceAll(q, `%`, `\%`)
+	q = strings.ReplaceAll(q, `_`, `\_`)
+	return "%" + q + "%"
+}
+
+type LicenseStats struct {
+	TrustedDevices int
+	ActiveSessions int
+}
+
+// LicenseStats returns per-license counters in two grouped queries instead of
+// the 2N+1 queries a per-row view would issue.
+func (s *Store) LicenseStats(ids []string, now int64) (map[string]LicenseStats, error) {
+	out := make(map[string]LicenseStats, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	devRows, err := s.db.Query(`SELECT license_id, COUNT(*) FROM devices
+		WHERE status = ? AND license_id IN (`+ph+`) GROUP BY license_id`, append([]any{DeviceTrusted}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	for devRows.Next() {
+		var id string
+		var n int
+		if err := devRows.Scan(&id, &n); err != nil {
+			devRows.Close()
+			return nil, err
+		}
+		st := out[id]
+		st.TrustedDevices = n
+		out[id] = st
+	}
+	if err := devRows.Close(); err != nil {
+		return nil, err
+	}
+	sessArgs := append([]any{SessionActive, now}, args...)
+	sessRows, err := s.db.Query(`SELECT d.license_id, COUNT(*) FROM sessions s
+		JOIN devices d ON s.device_id = d.id
+		WHERE s.status = ? AND s.lease_exp > ? AND d.license_id IN (`+ph+`)
+		GROUP BY d.license_id`, sessArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer sessRows.Close()
+	for sessRows.Next() {
+		var id string
+		var n int
+		if err := sessRows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		st := out[id]
+		st.ActiveSessions = n
+		out[id] = st
+	}
+	return out, sessRows.Err()
+}
+
+func (s *Store) DeleteOldAudits(cutoff int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM audits WHERE ts < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *Store) CountLicenses() (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM licenses`).Scan(&n)
@@ -103,7 +177,7 @@ func (s *Store) CountLicensesFiltered(status, query string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM licenses
 		WHERE (? = '' OR status = ?)
-		  AND (? = '' OR customer LIKE '%'||?||'%' OR note LIKE '%'||?||'%' OR id LIKE '%'||?||'%')`,
-		status, status, query, query, query, query).Scan(&n)
+		  AND (? = '' OR customer LIKE ? ESCAPE '\' OR note LIKE ? ESCAPE '\' OR id LIKE ? ESCAPE '\')`,
+		status, status, query, likePattern(query), likePattern(query), likePattern(query)).Scan(&n)
 	return n, err
 }

@@ -63,7 +63,7 @@ Usage:
   ehctl license oob ID          # reveal the current pending activation code
   ehctl license unlock ID       # clear the failed-attempt ladder
   ehctl license clear-resets ID # wipe HWID reset counters after verification
-  ehctl device list [--license ID]
+  ehctl device list [--license ID] [--limit N] [--offset N]
   ehctl device revoke ID        # terminal for this binding
   ehctl device release ID       # allow a new binding
   ehctl packages import FILE.provision.json

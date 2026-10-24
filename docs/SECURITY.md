@@ -33,7 +33,7 @@ stdlib or `x/crypto`, RustCrypto or rustls.
 | `.ehpkg` payload | XChaCha20-Poly1305, AAD=package id; sha256 of the plaintext in the public header | random 32-byte `k_pkg` per package |
 | Admin tokens | `eh_` + 24 random bytes hex; `argon2id` hash at rest | token itself shown once |
 | Transport (server) | Go `crypto/tls` ≥ 1.2, listener cert; optional mTLS for admin API | X.509 |
-| Transport (client) | `rustls` 0.23 (ring), `webpki-roots`; optional SPKI pin (SHA-256 of the leaf public key) | X.509 + pin |
+| Transport (client) | `rustls` 0.23 (ring); `webpki-roots`, or a custom CA bundle that replaces them; optional SPKI pin (SHA-256 of the leaf public key) | X.509 + pin |
 | Randomness | `crypto/rand` (Go), `getrandom` (Rust) | OS CSPRNG |
 
 Key derivation from the master key uses HKDF-SHA256 with fixed, purpose-
@@ -81,24 +81,37 @@ construction gets `/v2`, never a silent edit.
   (`MakeCredential`) always stays in Go. Both paths are memory-safe Go, but
   only `eh-trustd` puts the whole quote path behind a process boundary.
 - Non-standard RSA-PSS signatures whose salt length differs from the digest
-  size, AK default schemes other than NULL/RSASSA/RSAPSS/ECDSA, RSA keys below
-  2048 bits, and cross-hash ECDSA pairs: the embedded verifier accepts some of
-  these, `eh-trustd` rejects them. TPM 2.0 hardware uses the accepted shapes;
-  a differential test pins the PSS difference.
+  size, ECDSA pairs whose curve and hash do not match (P-256/SHA-256 or
+  P-384/SHA-384), AK default schemes other than NULL/RSASSA/RSAPSS/ECDSA, and
+  RSA keys below 2048 bits. Both the embedded verifier and `eh-trustd` reject
+  these; TPM 2.0 hardware uses the accepted shapes, and a differential test
+  pins the behaviour.
 
 ## Deployment hardening checklist
 
 - [ ] TLS certificate from a real CA for the customer-facing hostname;
       private key readable only by the server user.
 - [ ] If the admin API is reachable beyond localhost: enable mTLS
-      (`tls.client_ca_file`) **and** keep bearer tokens; restrict the port
-      with a firewall.
+      (`tls.client_ca_file`) **and** keep bearer tokens; list every allowed
+      client-certificate CN in `security.mtls_admin_cns` (required; any other
+      certificate falls back to bearer auth); restrict the port with a
+      firewall.
 - [ ] Master key: prefer `EH_MASTER_KEY` from your secrets manager; a key
       file must be `0600` and excluded from untrusted backups. Losing the
       master key means no license key can ever be verified again.
 - [ ] Data dir `0700`, database file owned by the service user only.
 - [ ] Nightly `deploy/backup.sh` (or `ehctl backup`) + a tested restore
-      procedure (`docs/OPERATIONS.md`), stored off-host.
+      procedure (`docs/OPERATIONS.md`), stored off-host. The script takes a
+      lock, requires `flock`, and refuses concurrent runs.
+- [ ] If you use webhook delivery, set `notify.webhook_secret` (required;
+      licenses with a webhook channel cannot be created without it) and keep
+      the endpoint on a public HTTPS address. The notifier refuses loopback,
+      private, link-local, CGNAT and unspecified destinations, and does not
+      follow redirects.
+- [ ] Choose `retention.audit_days`, `retention.session_days` and
+      `retention.device_days` (defaults 365/90/180; `0` disables that class).
+      The janitor applies them every minute, and your privacy policy should
+      match.
 - [ ] NTP time sync — leases, OOB TTLs and the audit trail all assume a
       sane server clock. Heartbeats tolerate client clock drift by design.
 - [ ] `attestation.mode`: start `auto`, move to `required` for licenses
@@ -107,10 +120,12 @@ construction gets `/v2`, never a silent edit.
       will land `tpm-quote` under `auto`; `required` rejects them. Without
       a usable quote they land `unattested`.
 - [ ] `clone.action: suspend` for high-value licenses.
-- [ ] Keep `reset_hwid.enabled: true` for single-device licenses. Every
-      displacement of a trusted device costs one reset; exhaustion suspends
-      the license. Clear counters only after verifying the hardware change
-      (`ehctl license clear-resets`), then resume.
+- [ ] Keep `reset_hwid.enabled: true`. Every binding or explicit reset that
+      releases a trusted device costs one reset, for single- and multi-device
+      licenses alike; exhaustion suspends the license. A client reset names
+      one fingerprint and releases only that device. Clear counters only
+      after verifying the hardware change (`ehctl license clear-resets`),
+      then resume.
 - [ ] Protocol version is enforced (`X-EH-Protocol`); there is no downgrade
       path. Upgrade clients instead of widening the accepted range.
 - [ ] Review `ehctl audits` after onboarding waves; alert on

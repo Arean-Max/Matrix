@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	nonceTTLSeconds = 120
-	nonceCap        = 10000
+	nonceTTLSeconds        = 120
+	nonceCap               = 10000
+	noncePerFingerprintCap = 4
+	noncePerLicenseCap     = 256
 
 	ekPubMin = 64
 	ekPubMax = 2048
@@ -38,19 +40,6 @@ func (s *Service) Challenge(req *wire.ChallengeRequest, now int64) (*wire.Challe
 		return nil, err
 	}
 
-	if n, err := s.store.CountPendingNonces(now); err != nil {
-		return nil, err
-	} else if n >= nonceCap {
-		if _, err := s.store.DeleteStaleNonces(now); err != nil {
-			return nil, err
-		}
-		if n, err := s.store.CountPendingNonces(now); err != nil {
-			return nil, err
-		} else if n >= nonceCap {
-			return nil, errf(wire.CodeInternal, "nonce table saturated")
-		}
-	}
-
 	resp := &wire.ChallengeResponse{
 		Nonce:     cryptox.RandomHex(32),
 		ExpiresAt: now + nonceTTLSeconds,
@@ -66,7 +55,7 @@ func (s *Service) Challenge(req *wire.ChallengeRequest, now int64) (*wire.Challe
 	if act != nil {
 		resp.Activation = act
 	}
-	if err := s.store.CreateNonce(n); err != nil {
+	if err := s.store.CreateNonceCapped(n, now, noncePerFingerprintCap, noncePerLicenseCap, nonceCap); err != nil {
 		return nil, err
 	}
 	return resp, nil

@@ -13,6 +13,7 @@ type Config struct {
 	Security             Security    `yaml:"security"`
 	Clone                Clone       `yaml:"clone"`
 	Reset                ResetHWID   `yaml:"reset_hwid"`
+	Retention            Retention   `yaml:"retention"`
 }
 
 type TLS struct {
@@ -43,9 +44,16 @@ type Notify struct {
 }
 
 type Security struct {
-	DevAllowHTTP       bool `yaml:"dev_allow_http"`
-	SupersedeGraceSec  int  `yaml:"supersede_grace_s"`
-	MinResponseFloorMS int  `yaml:"min_response_floor_ms"`
+	DevAllowHTTP       bool     `yaml:"dev_allow_http"`
+	SupersedeGraceSec  int      `yaml:"supersede_grace_s"`
+	MinResponseFloorMS int      `yaml:"min_response_floor_ms"`
+	MTLSAdminCNs       []string `yaml:"mtls_admin_cns"`
+}
+
+type Retention struct {
+	AuditDays   int `yaml:"audit_days"`
+	SessionDays int `yaml:"session_days"`
+	DeviceDays  int `yaml:"device_days"`
 }
 
 type Clone struct {
@@ -78,5 +86,10 @@ func Default() *Config {
 		},
 		Clone: Clone{Action: "flag"},
 		Reset: ResetHWID{Enabled: true, CooldownDays: 30, LifetimeLimit: 3},
+		Retention: Retention{
+			AuditDays:   365,
+			SessionDays: 90,
+			DeviceDays:  180,
+		},
 	}
 }

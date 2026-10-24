@@ -63,6 +63,14 @@ silently minting a new key: restore the key or remove the database. Back the
 key up **separately** from the database, to a place you trust. If the key is
 lost, every license key becomes unverifiable (they exist only as HMACs).
 
+**Admin mTLS.** Set `tls.client_ca_file` to the CA that signs operator client
+certificates and list every allowed certificate CN in
+`security.mtls_admin_cns`. The two settings are required together. A
+certificate signed by that CA is accepted only when its CN is on the list;
+otherwise the request falls back to bearer-token authentication, so keep
+tokens enabled. `EH_TLS_ADMIN_CNS` overrides the list with comma-separated
+names.
+
 ## 2. Bootstrap
 
 First start logs "no admin tokens exist; bootstrap credential written".
@@ -75,10 +83,11 @@ ehctl init --bootstrap-file /var/lib/eh/bootstrap.token \
 
 This creates an `admin` token (written to `~/.ehctl/token` by default).
 The bootstrap credential is accepted only until the first admin token is
-created through the API; it is then disabled in-process and the file is
-removed on the next start. If you revoke every admin token, restart the
-server: with no active tokens it mints a new bootstrap credential. Create
-narrower tokens for automation:
+created through the API; it is then disabled in-process and
+`<data_dir>/bootstrap.token` is deleted immediately. A stale file is also
+removed on startup when active tokens exist. If you revoke every admin token,
+restart the server: with no active tokens it mints a new bootstrap
+credential. Create narrower tokens for automation:
 
 ```sh
 ehctl tokens create "monitoring" --role read
@@ -109,20 +118,23 @@ ehctl device release <device-id>         # allow a new binding (fresh OOB code)
 ehctl license clear-resets <license-id>  # operator-only: wipe HWID reset counters
 ```
 
+`device list` is paginated: it returns at most 200 rows (default 50) and
+prints the total when more remain; use `--limit` and `--offset` to page.
+
 `license resume` is rejected once a license is `revoked`; create a new license
 instead. `device release` also revokes the device's sessions, so a replacement
 machine starts from a clean activation. A revoked device cannot re-activate
 until an operator explicitly releases it.
 
-**HWID resets.** For single-device licenses (`max_devices: 1`), replacing a
-trusted device consumes one reset. Defaults: 30-day cooldown and three
-automatic resets (`reset_hwid` in `server.yaml`). The client may call
-`POST /api/v1/reset-hwid` to unbind everything and start a clean activation;
-every path still requires a fresh OOB code. When the quota is exhausted the
-license is suspended and `hwid.reset_quota` is audited. Resolve with
-`ehctl license clear-resets <id>`, then
+**HWID resets.** A binding that displaces a trusted device, or a call to
+`POST /api/v1/reset-hwid`, consumes one reset. This applies to every license,
+including multi-device ones. The reset request must name the fingerprint to
+release and unbinds only that device; other bindings keep working. Defaults:
+30-day cooldown and three automatic resets (`reset_hwid` in `server.yaml`).
+Every path still requires a fresh OOB code for the next activation. When the
+quota is exhausted the license is suspended and `hwid.reset_quota` is
+audited. Resolve with `ehctl license clear-resets <id>`, then
 `ehctl license resume <id> --reason "verified hardware replacement"`.
-Multi-device licenses are not quota-limited; each binding still needs OOB.
 
 Webhook channel: the server POSTs JSON
 
@@ -132,7 +144,12 @@ Webhook channel: the server POSTs JSON
 ```
 
 with `X-EH-Signature: hex(HMAC-SHA256(webhook_secret, body))`. Verify it.
-Redirects are not followed; point the channel at the final HTTPS URL.
+`notify.webhook_secret` is mandatory for webhook delivery, and creating a
+license with a `webhook:` channel fails without it (`EH_WEBHOOK_SECRET` is
+the environment equivalent). Redirects are not
+followed; point the channel at the final HTTPS URL. Delivery refuses
+loopback, private, link-local, CGNAT and unspecified addresses, so a webhook
+cannot be used to probe the internal network.
 Manual channel: operators read codes with `ehctl license oob`; that endpoint
 requires an `admin`-role token (read-only tokens are for monitoring).
 
@@ -155,6 +172,10 @@ Nightly, as root on the server host:
 ```sh
 deploy/backup.sh /var/backups/eh      # wraps: ehctl backup --out FILE
 ```
+
+The script takes an exclusive lock (`flock` must be installed) and refuses to
+run concurrently. `EH_BACKUP_KEEP` must be an integer >= 1 (default 14), and
+old copies are removed only after the new one succeeds.
 
 `ehctl backup` asks the server for a consistent SQLite copy (`VACUUM INTO`)
 and streams it down; it is safe while the server runs. The copy contains
@@ -233,13 +254,20 @@ with the key. This is why the key backup is not optional.
 
 Admin tokens created before the schema v2 migration are upgraded with a
 lookup hash on their first successful request; no rotation is needed.
-Downgrades are not supported once migrations ran.
+Downgrades are not supported once migrations ran. Deployments that use
+`tls.client_ca_file` must add `security.mtls_admin_cns` before restarting;
+startup now fails when the allowlist is missing or empty. Deployments with
+`notify.webhook_url` must set `notify.webhook_secret`; startup fails without
+it, and existing webhook channels cannot deliver until it is set.
 
-Ended sessions are kept for audit correlation; rows accumulate slowly. With
-the server stopped, you may prune sessions whose lease expired more than 90
-days ago. Audits are never deleted by the server — archive or purge them
-according to your retention policy (and remember that erasing a license does
-not erase its audit rows).
+Retention is enforced by the janitor (every minute) when the corresponding
+`retention` value is positive; `0` disables that class:
+`retention.session_days` (default 90) deletes ended sessions created before
+the cutoff, `retention.audit_days` (default 365) deletes older audit rows, and
+`retention.device_days` (default 180) deletes released or revoked devices last
+seen before the cutoff. Trusted devices and unexpired sessions are never
+deleted. Set these to match your privacy policy; backups keep the old data
+until their own retention removes it.
 
 ## 7. Key and certificate rotation
 
@@ -261,6 +289,7 @@ not erase its audit rows).
 | Symptom | Likely cause | Action |
 |---------|--------------|--------|
 | Client: `x509`/`certificate` error | server cert not trusted | ship `--ca ca.pem` to clients or use a public CA |
+| Admin mTLS still asks for a token | certificate CN missing from `security.mtls_admin_cns`, or mTLS not enabled | add the exact CN, set `tls.client_ca_file`, restart |
 | Client exit code 2 / `oob_required` | new device needs a code | `ehctl license oob <id>`, re-run with `--code` |
 | `code_locked` | too many wrong codes | wait for `retry_after_s`, or `ehctl license unlock` |
 | `rate_limited` | per-IP/license limits | back off; limits are documented in PROTOCOL §3 |
@@ -270,7 +299,7 @@ not erase its audit rows).
 | `lease_expired` | client offline past `lease_ttl + grace` | expected — the client must reach the server again |
 | `ack_chain_broken` | cloned machine or telemetry lost | check `session.clone_suspect` audits; policy in `clone.action` |
 | `session_revoked` | device revoked or session superseded | superseded: retry; revoked: `ehctl device release`, then activate with a fresh code |
-| `reset_cooldown` | single-device license reset less than `reset_hwid.cooldown_days` ago | wait for `retry_after_s`; a support reset is `ehctl license clear-resets` + `resume` |
+| `reset_cooldown` | license reset less than `reset_hwid.cooldown_days` ago | wait for `retry_after_s`; a support reset is `ehctl license clear-resets` + `resume` |
 | `reset_quota` | all automatic HWID resets consumed; license is suspended | verify the hardware change, then `ehctl license clear-resets <id>` + `ehctl license resume <id> --reason ...` |
 | `protocol_unsupported` | client omitted `X-EH-Protocol` or sent an unsupported version | upgrade the client; downgrade is intentionally unsupported |
 | Any 5xx with a `request_id` | server-side failure; the response header/body carries the correlation ID | search the JSON log for that `request_id`; the entry has route, method, path, error and stack |

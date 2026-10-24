@@ -175,7 +175,7 @@ func VerifyEd25519(pub, msg, sig []byte) bool {
 }
 
 const (
-	argonTime    = 1
+	argonTime    = 2
 	argonMemory  = 32 * 1024
 	argonThreads = 4
 	argonKeyLen  = 32

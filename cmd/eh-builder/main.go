@@ -11,6 +11,7 @@ import (
 
 	"eventhorizon/internal/packaging"
 	"eventhorizon/internal/version"
+	"eventhorizon/internal/wire"
 )
 
 func main() {
@@ -66,6 +67,9 @@ func cmdPack(args []string) error {
 	}
 	if *id == "" || *name == "" || *in == "" {
 		return errors.New("--id, --name and --in are required")
+	}
+	if !wire.ValidPackageID(*id) {
+		return errors.New("--id must be 1..64 lowercase letters, digits, dot, dash or underscore")
 	}
 	payload, err := os.ReadFile(*in)
 	if err != nil {

@@ -46,7 +46,8 @@ eh-server -config server.yaml
 ```
 
 On the first start the server writes `<data_dir>/bootstrap.token` and logs
-the path. Consume it once to create a real admin token:
+the path. Consume it once to create a real admin token; the server deletes the
+file as soon as the first token exists:
 
 ```sh
 ehctl init --bootstrap-file /var/lib/eh/bootstrap.token \

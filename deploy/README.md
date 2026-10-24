@@ -20,7 +20,9 @@ Three supported shapes, all running the same binary:
    The bootstrap credential is removed automatically once a real admin token
    exists (ADR-006).
 5. Create the first license:
-   `ehctl license create --customer "Acme" --channel webhook:https://...`
+   `ehctl license create --customer "Acme" --channel manual`
+   (for webhook delivery, set `notify.webhook_secret` first; otherwise
+   webhook channels are rejected).
 
 ## Backups
 

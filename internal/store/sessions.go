@@ -86,10 +86,30 @@ func (s *Store) SessionByID(id string) (*Session, error) {
 	return s.scanSession(s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions WHERE id = ?`, id))
 }
 
-func (s *Store) UpdateSessionHeartbeat(id string, seq uint64, lastAck, priorAck string, lastHBAt, leaseExp int64) error {
-	_, err := s.db.Exec(`UPDATE sessions SET last_seq = ?, last_ack = ?, prior_ack = ?, last_hb_at = ?, lease_exp = ? WHERE id = ?`,
-		seq, lastAck, priorAck, lastHBAt, leaseExp, id)
-	return err
+// UpdateSessionHeartbeat advances the ack chain only if the session still has
+// the sequence and ack the caller observed. It returns ErrConflict when a
+// concurrent heartbeat got there first; the caller should re-read and retry.
+func (s *Store) UpdateSessionHeartbeat(id string, expectedSeq uint64, expectedAck string, seq uint64, lastAck, priorAck string, lastHBAt, leaseExp int64) error {
+	res, err := s.db.Exec(`UPDATE sessions SET last_seq = ?, last_ack = ?, prior_ack = ?, last_hb_at = ?, lease_exp = ?
+		WHERE id = ? AND last_seq = ? AND last_ack = ?`,
+		seq, lastAck, priorAck, lastHBAt, leaseExp, id, expectedSeq, expectedAck)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (s *Store) DeleteOldSessions(now, cutoff int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM sessions
+		WHERE created_at < ? AND (status <> ? OR lease_exp < ?)`,
+		cutoff, SessionActive, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) SupersedeSessions(deviceID, exceptID string, now int64) (int64, error) {

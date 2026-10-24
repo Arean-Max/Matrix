@@ -171,7 +171,7 @@ func TestActivateResendAndExpiry(t *testing.T) {
 	if _, err := srv.Activate(ctx, &wire.ActivateRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA}, testNow+10); err != nil {
 		t.Fatal(err)
 	}
-	cur, err := st.CurrentOOB(lic.ID)
+	cur, err := st.CurrentOOB(lic.ID, testNow+1)
 	if err != nil || cur.ID != first.ID || cur.NotifiedAt != testNow {
 		t.Fatalf("early re-activate changed the code: %+v, %v", cur, err)
 	}
@@ -180,7 +180,7 @@ func TestActivateResendAndExpiry(t *testing.T) {
 	if _, err := srv.Activate(ctx, &wire.ActivateRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpA}, after); err != nil {
 		t.Fatal(err)
 	}
-	cur, err = st.CurrentOOB(lic.ID)
+	cur, err = st.CurrentOOB(lic.ID, after)
 	if err != nil || cur.ID != first.ID || cur.NotifiedAt != after {
 		t.Fatalf("resend changed the code or the timestamp: %+v, %v", cur, err)
 	}

@@ -6,6 +6,31 @@ import (
 	"eventhorizon/internal/cryptox"
 )
 
+func TestLicenseQueryEscapesWildcards(t *testing.T) {
+	s, _ := testStore(t)
+	special := &License{
+		ID: cryptox.RandomHex(16), KeyHMAC: cryptox.Random(32),
+		Status: LicenseActive, Customer: "100%_literal", Note: "a_b",
+		Channel: "manual", MaxDevices: 1, CreatedAt: 1000, UpdatedAt: 1000,
+	}
+	if err := s.CreateLicense(special); err != nil {
+		t.Fatal(err)
+	}
+	newLicense(t, s)
+
+	got, err := s.ListLicenses("", "%", 10, 0)
+	if err != nil || len(got) != 1 || got[0].ID != special.ID {
+		t.Fatalf("percent query = %+v, %v; want only the literal match", got, err)
+	}
+	got, err = s.ListLicenses("", "A_me", 10, 0)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("underscore query matched a wildcard: %+v, %v", got, err)
+	}
+	if n, err := s.CountLicensesFiltered("", "%"); err != nil || n != 1 {
+		t.Fatalf("CountLicensesFiltered = %d, %v", n, err)
+	}
+}
+
 func TestLicenseCRUD(t *testing.T) {
 	s, _ := testStore(t)
 	l := newLicense(t, s)

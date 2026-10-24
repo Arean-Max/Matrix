@@ -28,12 +28,12 @@ func TestResetHWIDFlow(t *testing.T) {
 		t.Fatalf("replacement counters = %d/%d", row.ResetCount, row.LastResetAt)
 	}
 
-	_, err = s.ResetHWID(&wire.ResetHWIDRequest{LicenseKey: lic.LicenseKey}, now+100)
+	_, err = s.ResetHWID(&wire.ResetHWIDRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpB}, now+100)
 	if e := wantErr(t, err, wire.CodeResetCooldown); e.RetryAfterS <= 0 {
 		t.Fatalf("cooldown retry_after_s = %d", e.RetryAfterS)
 	}
 
-	resp, err := s.ResetHWID(&wire.ResetHWIDRequest{LicenseKey: lic.LicenseKey}, now+86410)
+	resp, err := s.ResetHWID(&wire.ResetHWIDRequest{LicenseKey: lic.LicenseKey, Fingerprint: fpB}, now+86410)
 	if err != nil {
 		t.Fatal(err)
 	}

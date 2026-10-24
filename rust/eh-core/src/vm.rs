@@ -10,6 +10,8 @@ type HmacSha256 = Hmac<Sha256>;
 
 pub const MEM_SLOTS: usize = 16;
 pub const INPUT_SLOTS: usize = 8;
+pub const MAX_STACK: usize = 1024;
+pub const MAX_OUT: usize = 1 << 20;
 
 pub mod op {
     pub const HALT: u8 = 0x00;
@@ -38,6 +40,7 @@ pub enum VmError {
     BadOpcode(u8),
     BadConstIndex(u16),
     BadSlot(u8),
+    Limit(&'static str),
 }
 
 impl fmt::Display for VmError {
@@ -49,6 +52,7 @@ impl fmt::Display for VmError {
             VmError::BadOpcode(op) => write!(f, "unknown opcode {op:#04x}"),
             VmError::BadConstIndex(i) => write!(f, "const index {i} out of range"),
             VmError::BadSlot(s) => write!(f, "slot {s} out of range"),
+            VmError::Limit(what) => write!(f, "limit exceeded: {what}"),
         }
     }
 }
@@ -83,7 +87,13 @@ impl Bytecode {
         Ok(Bytecode { consts, code })
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, VmError> {
+        if self.consts.len() > u16::MAX as usize {
+            return Err(VmError::Malformed("too many constants"));
+        }
+        if self.code.len() > u32::MAX as usize {
+            return Err(VmError::Malformed("code is too large"));
+        }
         let mut out =
             Vec::with_capacity(MAGIC.len() + 2 + self.consts.len() * WORD + 4 + self.code.len());
         out.extend_from_slice(MAGIC);
@@ -93,7 +103,7 @@ impl Bytecode {
         }
         out.extend_from_slice(&(self.code.len() as u32).to_be_bytes());
         out.extend_from_slice(&self.code);
-        out
+        Ok(out)
     }
 }
 
@@ -138,13 +148,13 @@ impl Vm {
                         .consts
                         .get(idx as usize)
                         .ok_or(VmError::BadConstIndex(idx))?;
-                    stack.push(*c);
+                    push(&mut stack, *c)?;
                 }
-                op::SEED => stack.push(self.seed),
+                op::SEED => push(&mut stack, self.seed)?,
                 op::LOAD => {
                     let slot = read_u8(code, &mut pc)?;
                     let s = mem.get(slot as usize).ok_or(VmError::BadSlot(slot))?;
-                    stack.push(*s);
+                    push(&mut stack, *s)?;
                 }
                 op::STORE => {
                     let slot = read_u8(code, &mut pc)?;
@@ -154,7 +164,7 @@ impl Vm {
                 }
                 op::DUP => {
                     let v = *stack.last().ok_or(VmError::StackUnderflow)?;
-                    stack.push(v);
+                    push(&mut stack, v)?;
                 }
                 op::DROP => {
                     pop(&mut stack)?;
@@ -162,8 +172,8 @@ impl Vm {
                 op::SWAP => {
                     let b = pop(&mut stack)?;
                     let a = pop(&mut stack)?;
-                    stack.push(b);
-                    stack.push(a);
+                    push(&mut stack, b)?;
+                    push(&mut stack, a)?;
                 }
                 op::XOR => {
                     let b = pop(&mut stack)?;
@@ -172,7 +182,7 @@ impl Vm {
                     for i in 0..WORD {
                         r[i] = a[i] ^ b[i];
                     }
-                    stack.push(r);
+                    push(&mut stack, r)?;
                 }
                 op::ADD => {
                     let b = pop(&mut stack)?;
@@ -184,7 +194,7 @@ impl Vm {
                         r[i] = v as u8;
                         carry = v >> 8;
                     }
-                    stack.push(r);
+                    push(&mut stack, r)?;
                 }
                 op::SHA => {
                     let a = pop(&mut stack)?;
@@ -193,7 +203,7 @@ impl Vm {
                     let digest = h.finalize();
                     let mut r = [0u8; WORD];
                     r.copy_from_slice(&digest);
-                    stack.push(r);
+                    push(&mut stack, r)?;
                 }
                 op::HMAC => {
                     let msg = pop(&mut stack)?;
@@ -204,18 +214,18 @@ impl Vm {
                     let digest = mac.finalize().into_bytes();
                     let mut r = [0u8; WORD];
                     r.copy_from_slice(&digest);
-                    stack.push(r);
+                    push(&mut stack, r)?;
                 }
                 op::CMP => {
                     let b = pop(&mut stack)?;
                     let a = pop(&mut stack)?;
                     let r = if a == b { [0xFFu8; WORD] } else { [0u8; WORD] };
-                    stack.push(r);
+                    push(&mut stack, r)?;
                 }
                 op::JNZ => {
                     let off = read_i16(code, &mut pc)?;
                     let target = pc as i64 + off as i64;
-                    if target < 0 || target as usize > code.len() {
+                    if target < 0 || target as usize >= code.len() {
                         return Err(VmError::Malformed("jump out of range"));
                     }
                     let v = pop(&mut stack)?;
@@ -225,6 +235,9 @@ impl Vm {
                 }
                 op::OUT => {
                     let v = pop(&mut stack)?;
+                    if out.len() + WORD > MAX_OUT {
+                        return Err(VmError::Limit("output"));
+                    }
                     out.extend_from_slice(&v);
                 }
                 op::INPUT => {
@@ -237,13 +250,21 @@ impl Vm {
                         .get(slot as usize)
                         .copied()
                         .unwrap_or([0u8; WORD]);
-                    stack.push(v);
+                    push(&mut stack, v)?;
                 }
                 other => return Err(VmError::BadOpcode(other)),
             }
         }
         Ok(out)
     }
+}
+
+fn push(stack: &mut Vec<[u8; WORD]>, v: [u8; WORD]) -> Result<(), VmError> {
+    if stack.len() >= MAX_STACK {
+        return Err(VmError::Limit("stack"));
+    }
+    stack.push(v);
+    Ok(())
 }
 
 fn pop(stack: &mut Vec<[u8; WORD]>) -> Result<[u8; WORD], VmError> {
@@ -314,7 +335,7 @@ mod tests {
     #[test]
     fn binary_round_trip() {
         let prog = assemble_bytecode(".const \"a\"\nseed\nout\nhalt").unwrap();
-        let bytes = prog.to_bytes();
+        let bytes = prog.to_bytes().unwrap();
         let back = Bytecode::parse(&bytes).unwrap();
         assert_eq!(back.consts, prog.consts);
         assert_eq!(back.code, prog.code);
@@ -323,7 +344,7 @@ mod tests {
     #[test]
     fn parse_rejects_garbage() {
         assert!(Bytecode::parse(b"nope").is_err());
-        let mut bytes = assemble_bytecode("halt").unwrap().to_bytes();
+        let mut bytes = assemble_bytecode("halt").unwrap().to_bytes().unwrap();
         bytes.push(0);
         assert!(matches!(
             Bytecode::parse(&bytes),
@@ -394,6 +415,55 @@ mod tests {
         let mut want = [0u8; 32];
         want[0] = 0x01;
         assert_eq!(out, want.to_vec());
+    }
+
+    #[test]
+    fn jump_to_the_end_of_code_is_rejected() {
+        let prog = assemble_bytecode(
+            r#"
+            .const 0x01
+            push 0
+            jnz end
+            end:
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            Vm::with_seed([0u8; 32]).run(&prog),
+            Err(VmError::Malformed("jump out of range"))
+        );
+    }
+
+    #[test]
+    fn stack_growth_is_bounded() {
+        let mut source = String::from("seed\n");
+        for _ in 0..MAX_STACK {
+            source.push_str("dup\n");
+        }
+        source.push_str("halt\n");
+        let prog = assemble_bytecode(&source).unwrap();
+        assert_eq!(
+            Vm::with_seed([0u8; 32]).run(&prog),
+            Err(VmError::Limit("stack"))
+        );
+    }
+
+    #[test]
+    fn output_growth_is_bounded() {
+        let mut code = Vec::new();
+        for _ in 0..(MAX_OUT / WORD) + 1 {
+            code.push(op::SEED);
+            code.push(op::OUT);
+        }
+        code.push(op::HALT);
+        let prog = Bytecode {
+            consts: Vec::new(),
+            code,
+        };
+        assert_eq!(
+            Vm::with_seed([0u8; 32]).run(&prog),
+            Err(VmError::Limit("output"))
+        );
     }
 
     #[test]

@@ -108,11 +108,13 @@ func (s *Server) handleResetHWID(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, missingField("license_key"))
 		return
 	}
-	if req.Fingerprint != "" {
-		if err := validateFingerprint(req.Fingerprint); err != nil {
-			s.writeError(w, r, err)
-			return
-		}
+	if req.Fingerprint == "" {
+		s.writeError(w, r, missingField("fingerprint"))
+		return
+	}
+	if err := validateFingerprint(req.Fingerprint); err != nil {
+		s.writeError(w, r, err)
+		return
 	}
 	if ok, retry := s.account.AllowRetry("resethwid:"+licenseLimitKey(req.LicenseKey), 0.05, 3); !ok {
 		writeRateLimited(w, r, retry)

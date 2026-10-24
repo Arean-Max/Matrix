@@ -47,7 +47,7 @@ func TestAdminAuthAndRoles(t *testing.T) {
 func TestBackupEndpoint(t *testing.T) {
 	e := testAPI(t)
 
-	resp, raw := e.do(t, http.MethodGet, "/admin/v1/backup", e.adminTok, nil)
+	resp, raw := e.do(t, http.MethodPost, "/admin/v1/backup", e.adminTok, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("backup: %d %s", resp.StatusCode, raw)
 	}
@@ -68,9 +68,9 @@ func TestBackupEndpoint(t *testing.T) {
 	}
 	var tok wire.TokenCreateResponse
 	decodeInto(t, raw, &tok)
-	resp, raw = e.do(t, http.MethodGet, "/admin/v1/backup", tok.Token, nil)
+	resp, raw = e.do(t, http.MethodPost, "/admin/v1/backup", tok.Token, nil)
 	wantCode(t, resp, raw, http.StatusForbidden, wire.CodeUnauthorized)
-	resp, raw = e.do(t, http.MethodGet, "/admin/v1/backup", "", nil)
+	resp, raw = e.do(t, http.MethodPost, "/admin/v1/backup", "", nil)
 	wantCode(t, resp, raw, http.StatusUnauthorized, wire.CodeUnauthorized)
 
 	resp, raw = e.do(t, http.MethodGet, "/admin/v1/licenses/missing/oob", tok.Token, nil)

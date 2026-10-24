@@ -202,7 +202,9 @@ enrollment (TOFU), software keys are indistinguishable from TPM keys at this
 layer, and DRM-grade EK certificate validation is out of scope (ADR-008).
 
 Nonce: 32 random bytes, single-use, TTL 120 s, bound to (license, fingerprint).
-Global cap 10 000 pending nonces; an in-process janitor expires stale rows.
+Pending nonces are bounded: 4 per fingerprint, 256 per license and 10 000
+globally; the oldest rows are evicted after each insert, and a janitor expires
+stale rows.
 
 Limits: 30/min per IP, 12/min per device.
 
@@ -262,7 +264,9 @@ Verification order (any failure returns the error, no partial success):
      `sensitiveDataOrigin=1`.
    - Signature verifies over the attest bytes under `ak_pub`. Supported
      signature formats: RSASSA-PKCS1v15-SHA256 (`0x0014/0x000B`),
-     RSASSA-PSS-SHA256 (`0x0016/0x000B`), ECDSA-SHA256 (`0x0018/0x000B`).
+     RSASSA-PSS-SHA256 (`0x0016/0x000B`; salt length must equal the digest
+     size), ECDSA-SHA256 (`0x0018/0x000B`; P-256), and their SHA-384
+     equivalents with P-384. A curve/hash mismatch is rejected.
    - `ek_hash`: required when the device is already EK-enrolled or when the
      nonce requested activation; it must match the enrolled EK and the EK the
      activation blob was built against. A not-yet-enrolled device is enrolled
@@ -345,21 +349,22 @@ Limits: 1/10 s per session, 60/min per IP.
 
 ### 3.6 POST /api/v1/reset-hwid
 
-Releases every trusted device of a license so that the machine (or its
-replacement) must complete activation and a fresh OOB code again:
+Releases the trusted device with the given fingerprint so that the machine
+(or its replacement) must complete activation and a fresh OOB code again.
+`fingerprint` is required; other devices of the same license are left alone:
 
 ```json
-{"license_key": "...", "fingerprint": "hex64-or-omitted"}
+{"license_key": "...", "fingerprint": "hex64"}
 ```
 
-Response 200: `{"status": "released", "devices_released": 1}`. If no device is
-trusted the call is a no-op and does not consume quota.
+Response 200: `{"status": "released", "devices_released": 1}`. If that
+fingerprint has no trusted binding the call is a no-op and does not consume
+quota.
 
-Policy for single-device licenses (`max_devices == 1`; multi-device licenses
-are fleet-managed and are not quota-limited):
+Policy (all licenses, including multi-device):
 
-- A binding that displaces a trusted device counts as a reset, as does an
-  explicit call that releases at least one trusted device. Re-binding the same
+- A binding that displaces one or more trusted devices counts as one reset,
+  as does an explicit call that releases a trusted device. Re-binding the same
   fingerprint, or binding while a free slot exists, does not count.
 - `reset_hwid.cooldown_days` (default 30) must elapse between resets:
   `reset_cooldown` with `retry_after_s`.
@@ -368,9 +373,9 @@ are fleet-managed and are not quota-limited):
   counters with `ehctl license clear-resets <id>` and resumes it.
 - The quota check, the counter increment and the device release run in one
   SQLite transaction, so parallel requests cannot exceed the limit.
-- The endpoint never bypasses OOB: it only unbinds devices. The following
-  `/activate` issues a code exactly like a first activation.
-- `reset_hwid.enabled: false` disables quota accounting; devices are still
+- The endpoint never bypasses OOB: it only unbinds the named device. The
+  following `/activate` issues a code exactly like a first activation.
+- `reset_hwid.enabled: false` disables quota accounting; the device is still
   released and the operation is audited.
 
 Limits: 5/min per IP, 3/min per license. Every reset is audited as
@@ -410,7 +415,9 @@ decryption in addition to AEAD integrity.
 ## 6. Admin API (summary)
 
 Auth: `Authorization: Bearer eh_...` (argon2id-hashed at rest) or mTLS client
-certificate from the configured admin CA. Both may be enabled; mTLS CN or
+certificate from the configured admin CA. Both may be enabled. mTLS is
+accepted only when the certificate CN appears in `security.mtls_admin_cns`;
+otherwise the request falls back to bearer authentication. The mTLS CN or
 token name becomes the audit actor.
 
 - `POST /admin/v1/licenses` — create; the response contains the license key
@@ -421,7 +428,8 @@ token name becomes the audit actor.
 - `GET /admin/v1/licenses/{id}/oob` — current pending code plaintext
   (audited `oob.reveal`)
 - `POST /admin/v1/licenses/{id}/oob/unlock`
-- `GET /admin/v1/devices?license_id=`, `POST /admin/v1/devices/{id}/revoke`,
+- `GET /admin/v1/devices?license_id=&limit=&offset=` (response carries
+  `total`), `POST /admin/v1/devices/{id}/revoke`,
   `POST /admin/v1/devices/{id}/release`
 - `POST /admin/v1/packages` (import provision), `GET /admin/v1/packages`,
   `POST /admin/v1/packages/{id}/revoke`
@@ -429,7 +437,7 @@ token name becomes the audit actor.
 - `POST /admin/v1/tokens` `{"name","role"}` (token shown once),
   `GET /admin/v1/tokens`, `POST /admin/v1/tokens/{id}/revoke`
 - `GET /admin/v1/status`
-- `GET /admin/v1/backup` — consistent database copy (SQLite `VACUUM INTO`),
+- `POST /admin/v1/backup` — consistent database copy (SQLite `VACUUM INTO`),
   streamed as `application/vnd.sqlite3`; audited `backup.export`. Secrets
   inside stay field-encrypted; the master key is never part of it.
 

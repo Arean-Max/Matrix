@@ -139,7 +139,8 @@ protected (root-only, exclude from host-wide backups you don't trust).
 
 The admin plane is fully privileged by design (create, revoke, reveal OOB
 codes). Admin access is bearer tokens (`argon2id`-hashed at rest) and/or
-mTLS; every mutation lands in the audit trail. No attempt is made to defend
+mTLS restricted to an allowlist of certificate CNs; every mutation lands in
+the audit trail. No attempt is made to defend
 against a malicious operator: they own the deployment.
 
 ### A10 — Denial of service

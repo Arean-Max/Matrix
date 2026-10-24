@@ -15,5 +15,8 @@ func (s *Store) BackupInto(path string) error {
 	if _, err := s.db.Exec(`VACUUM INTO ?`, path); err != nil {
 		return fmt.Errorf("store: backup: %w", err)
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("store: backup permissions: %w", err)
+	}
 	return nil
 }

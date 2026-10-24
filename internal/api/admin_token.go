@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"eventhorizon/internal/wire"
 )
@@ -18,6 +20,10 @@ func (s *Server) adminCreateToken(w http.ResponseWriter, r *http.Request, actor 
 		return
 	}
 	s.bootstrapOff.Store(true)
+	path := filepath.Join(s.cfg.DataDir, "bootstrap.token")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		s.log.Warn("could not remove bootstrap token", "path", path, "error", err)
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 

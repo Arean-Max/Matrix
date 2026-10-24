@@ -4,6 +4,8 @@ data_dir: /var/lib/eh
 tls:
   cert_file: /etc/eh/tls/cert.pem
   key_file: /etc/eh/tls/key.pem
+  # Enables admin mTLS; security.mtls_admin_cns is then required:
+  # client_ca_file: /etc/eh/tls/admin-ca.pem
 
 lease_ttl_hours: 48
 offline_grace_hours: 72
@@ -21,10 +23,15 @@ attestation:
 
 notify:
   timeout_sec: 5
+  # webhook_url: https://ops.example.com/eh-hook
+  # Required for webhook delivery and for licenses with a webhook: channel:
+  # webhook_secret: replace-with-a-random-secret
 
 security:
   supersede_grace_s: 300
   min_response_floor_ms: 150
+  # Required with tls.client_ca_file; other certificates fall back to bearer auth:
+  # mtls_admin_cns: ["ehctl-admin"]
 
 clone:
   action: flag
@@ -33,3 +40,9 @@ reset_hwid:
   enabled: true
   cooldown_days: 30
   lifetime_limit: 3
+
+retention:
+  # 0 disables cleanup for that class.
+  audit_days: 365
+  session_days: 90
+  device_days: 180

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
@@ -162,7 +163,8 @@ func verifySignature(pub *gotpm.TPMTPublic, sig *gotpm.TPMTSignature, msg []byte
 		if sig.SigAlg == gotpm.TPMAlgRSASSA {
 			err = rsa.VerifyPKCS1v15(rsaPub, h, digest, rs.Sig.Buffer)
 		} else {
-			err = rsa.VerifyPSS(rsaPub, h, digest, rs.Sig.Buffer, nil)
+			err = rsa.VerifyPSS(rsaPub, h, digest, rs.Sig.Buffer,
+				&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: h})
 		}
 		if err != nil {
 			return reject("rsa signature check failed: %v", err)
@@ -180,6 +182,9 @@ func verifySignature(pub *gotpm.TPMTPublic, sig *gotpm.TPMTSignature, msg []byte
 		if err != nil {
 			return err
 		}
+		if !curveMatchesHash(ecPub.Curve, h) {
+			return reject("ecdsa curve %s does not match hash %s", ecPub.Curve.Params().Name, h)
+		}
 		digest := hashMessage(h, msg)
 		r := new(big.Int).SetBytes(es.SignatureR.Buffer)
 		s := new(big.Int).SetBytes(es.SignatureS.Buffer)
@@ -190,6 +195,17 @@ func verifySignature(pub *gotpm.TPMTPublic, sig *gotpm.TPMTSignature, msg []byte
 		return reject("unsupported signature algorithm 0x%x", sig.SigAlg)
 	}
 	return nil
+}
+
+func curveMatchesHash(curve elliptic.Curve, h crypto.Hash) bool {
+	switch h {
+	case crypto.SHA256:
+		return curve == elliptic.P256()
+	case crypto.SHA384:
+		return curve == elliptic.P384()
+	default:
+		return false
+	}
 }
 
 func toGoHash(a gotpm.TPMIAlgHash) (crypto.Hash, error) {

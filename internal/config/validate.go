@@ -21,6 +21,17 @@ func (c *Config) Validate() error {
 	if c.TLS.ClientCAFile != "" && c.TLS.CertFile == "" {
 		return errors.New("tls.client_ca_file needs tls.cert_file")
 	}
+	if c.TLS.ClientCAFile != "" && len(c.Security.MTLSAdminCNs) == 0 {
+		return errors.New("security.mtls_admin_cns is required when tls.client_ca_file is set")
+	}
+	if c.TLS.ClientCAFile == "" && len(c.Security.MTLSAdminCNs) > 0 {
+		return errors.New("security.mtls_admin_cns needs tls.client_ca_file")
+	}
+	for _, cn := range c.Security.MTLSAdminCNs {
+		if strings.TrimSpace(cn) == "" {
+			return errors.New("security.mtls_admin_cns contains an empty name")
+		}
+	}
 	switch c.Attestation.Mode {
 	case "auto", "required", "off":
 	default:
@@ -57,6 +68,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Notify.TimeoutSec <= 0 {
 		return errors.New("notify.timeout_sec must be positive")
+	}
+	if c.Notify.WebhookURL != "" && c.Notify.WebhookSecret == "" {
+		return errors.New("notify.webhook_secret is required when notify.webhook_url is set")
+	}
+	if c.Retention.AuditDays < 0 || c.Retention.SessionDays < 0 || c.Retention.DeviceDays < 0 {
+		return errors.New("retention days must be non-negative")
 	}
 	return nil
 }

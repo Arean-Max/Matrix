@@ -1,4 +1,7 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +10,54 @@ use crate::error::{Error, Result};
 
 const STATE_FILE: &str = "client.state";
 const STATE_VERSION: u32 = 1;
+const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+
+struct StateLock {
+    path: PathBuf,
+}
+
+impl StateLock {
+    fn acquire(dir: &Path) -> Result<StateLock> {
+        let path = dir.join(format!("{STATE_FILE}.lock"));
+        for _ in 0..100 {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut f) => {
+                    let _ = writeln!(f, "{}", std::process::id());
+                    let _ = f.sync_all();
+                    return Ok(StateLock { path });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if let Ok(modified) = meta.modified() {
+                            if modified
+                                .elapsed()
+                                .map(|age| age > LOCK_STALE_AFTER)
+                                .unwrap_or(false)
+                            {
+                                let _ = std::fs::remove_file(&path);
+                                continue;
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => {
+                    return Err(Error::State(format!("lock {}: {e}", path.display())));
+                }
+            }
+        }
+        Err(Error::State(format!(
+            "timed out waiting for {}",
+            path.display()
+        )))
+    }
+}
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SavedPackage {
@@ -63,15 +114,30 @@ impl SavedState {
     pub fn save(&self, dir: &Path) -> Result<()> {
         std::fs::create_dir_all(dir)
             .map_err(|e| Error::State(format!("create {}: {e}", dir.display())))?;
+        let _lock = StateLock::acquire(dir)?;
         let plain = serde_json::to_vec_pretty(self)
             .map_err(|e| Error::State(format!("encode state: {e}")))?;
         let sealed = dpapi::protect(&plain)?;
         let path = dir.join(STATE_FILE);
-        let tmp: PathBuf = dir.join(format!("{STATE_FILE}.tmp"));
-        std::fs::write(&tmp, &sealed)
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp: PathBuf = dir.join(format!("{STATE_FILE}.tmp.{}.{}", std::process::id(), nanos));
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
             .map_err(|e| Error::State(format!("write {}: {e}", tmp.display())))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| Error::State(format!("replace {}: {e}", path.display())))?;
+        if let Err(e) = f.write_all(&sealed).and_then(|_| f.sync_all()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::State(format!("write {}: {e}", tmp.display())));
+        }
+        drop(f);
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::State(format!("replace {}: {e}", path.display())));
+        }
         Ok(())
     }
 

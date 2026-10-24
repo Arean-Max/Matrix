@@ -1,6 +1,15 @@
+//! C ABI for the client SDK.
+//!
+//! A handle may be used from one thread at a time; callers must synchronize
+//! calls on the same handle. Returned string pointers are owned by the handle
+//! and remain valid only until the next call on that handle, or until
+//! `eh_client_free`. `eh_client_free` is idempotent.
+
+use std::collections::HashSet;
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -142,12 +151,27 @@ impl EhClient {
     }
 }
 
+fn live() -> &'static Mutex<HashSet<usize>> {
+    static LIVE: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn is_live(client: *mut EhClient) -> bool {
+    live()
+        .lock()
+        .map(|set| set.contains(&(client as usize)))
+        .unwrap_or(false)
+}
+
 fn guard(f: impl FnOnce() -> i32) -> i32 {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(EH_ERR_PANIC)
 }
 
+/// # Safety
+/// The caller must pass a handle returned by `eh_client_new` and must not call
+/// it concurrently with `eh_client_free` or another mutating call.
 unsafe fn with<F: FnOnce(&mut EhClient) -> i32>(client: *mut EhClient, f: F) -> i32 {
-    if client.is_null() {
+    if client.is_null() || !is_live(client) {
         return EH_ERR_INVALID_ARG;
     }
     guard(|| f(&mut *client))
@@ -168,7 +192,13 @@ pub unsafe extern "C" fn eh_client_new(config_json: *const c_char) -> *mut EhCli
         Ok(EhClient::new(inner))
     }));
     match parsed {
-        Ok(Ok(c)) => Box::into_raw(Box::new(c)),
+        Ok(Ok(c)) => {
+            let ptr = Box::into_raw(Box::new(c));
+            if let Ok(mut set) = live().lock() {
+                set.insert(ptr as usize);
+            }
+            ptr
+        }
         Ok(Err(msg)) => {
             eprintln!("eh-client: eh_client_new failed: {msg}");
             std::ptr::null_mut()
@@ -177,9 +207,19 @@ pub unsafe extern "C" fn eh_client_new(config_json: *const c_char) -> *mut EhCli
     }
 }
 
+/// # Safety
+/// `client` must be a handle returned by `eh_client_new`. Freeing the same
+/// handle more than once is a no-op after the first call.
 #[no_mangle]
 pub unsafe extern "C" fn eh_client_free(client: *mut EhClient) {
-    if !client.is_null() {
+    if client.is_null() {
+        return;
+    }
+    let removed = live()
+        .lock()
+        .map(|mut set| set.remove(&(client as usize)))
+        .unwrap_or(false);
+    if removed {
         let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(client))));
     }
 }
@@ -248,7 +288,7 @@ pub unsafe extern "C" fn eh_client_ensure_session(client: *mut EhClient) -> i32 
 
 #[no_mangle]
 pub unsafe extern "C" fn eh_client_status_json(client: *mut EhClient) -> *const c_char {
-    if client.is_null() {
+    if client.is_null() || !is_live(client) {
         return std::ptr::null();
     }
     guard_ref(|| {
@@ -260,7 +300,7 @@ pub unsafe extern "C" fn eh_client_status_json(client: *mut EhClient) -> *const 
 
 #[no_mangle]
 pub unsafe extern "C" fn eh_client_last_error(client: *mut EhClient) -> *const c_char {
-    if client.is_null() {
+    if client.is_null() || !is_live(client) {
         return std::ptr::null();
     }
     guard_ref(|| (&*client).last_error.as_ptr())
@@ -268,7 +308,7 @@ pub unsafe extern "C" fn eh_client_last_error(client: *mut EhClient) -> *const c
 
 #[no_mangle]
 pub unsafe extern "C" fn eh_client_vm_seed(client: *mut EhClient) -> *const c_char {
-    if client.is_null() {
+    if client.is_null() || !is_live(client) {
         return std::ptr::null();
     }
     guard_ref(|| {
@@ -283,7 +323,7 @@ pub unsafe extern "C" fn eh_client_payload(
     client: *mut EhClient,
     out_len: *mut usize,
 ) -> *const u8 {
-    if client.is_null() {
+    if client.is_null() || !is_live(client) {
         return std::ptr::null();
     }
     guard_ref(|| {
@@ -346,6 +386,8 @@ mod tests {
             .to_string();
         assert!(!msg.is_empty());
 
+        unsafe { eh_client_free(client) };
+        assert!(unsafe { eh_client_status_json(client) }.is_null());
         unsafe { eh_client_free(client) };
         unsafe { eh_client_free(std::ptr::null_mut()) };
     }

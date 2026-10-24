@@ -66,10 +66,10 @@ func (s *Store) LatestUnconsumedOOB(licenseID, fp string) (*OOBCode, error) {
 		ORDER BY created_at DESC LIMIT 1`, licenseID, fp))
 }
 
-func (s *Store) CurrentOOB(licenseID string) (*OOBCode, error) {
+func (s *Store) CurrentOOB(licenseID string, now int64) (*OOBCode, error) {
 	return s.scanOOB(s.db.QueryRow(`SELECT `+oobCols+` FROM oob_codes
-		WHERE license_id = ? AND consumed_at = 0
-		ORDER BY created_at DESC LIMIT 1`, licenseID))
+		WHERE license_id = ? AND consumed_at = 0 AND expires_at > ?
+		ORDER BY created_at DESC LIMIT 1`, licenseID, now))
 }
 
 func (s *Store) SetOOBNotifiedAt(id string, at int64) error {

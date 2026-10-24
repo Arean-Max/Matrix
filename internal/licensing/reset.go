@@ -2,30 +2,32 @@ package licensing
 
 import (
 	"errors"
-	"fmt"
 
 	"eventhorizon/internal/store"
 	"eventhorizon/internal/wire"
 )
 
 func (s *Service) ResetHWID(req *wire.ResetHWIDRequest, now int64) (*wire.ResetHWIDResponse, error) {
+	if !wire.ValidFingerprint(req.Fingerprint) {
+		return nil, errf(wire.CodeInvalidRequest, "fingerprint is required")
+	}
 	l, err := s.licenseByKey(req.LicenseKey)
 	if err != nil {
 		return nil, err
 	}
-	released, err := s.store.ResetLicenseDevices(l.ID, now, s.resetPolicy(l))
+	released, err := s.store.ResetDevice(l.ID, req.Fingerprint, now, s.resetPolicy(l))
 	if err != nil {
 		return nil, s.resetError(l, err, now)
 	}
 	if released > 0 {
-		s.audit(store.AuditResetHWID, "client", l.ID, "", fmt.Sprintf("released %d device(s)", released), now)
+		s.audit(store.AuditResetHWID, "client", l.ID, "", "fingerprint "+req.Fingerprint, now)
 	}
 	return &wire.ResetHWIDResponse{Status: wire.StatusReleased, DevicesReleased: released}, nil
 }
 
 func (s *Service) resetPolicy(l *store.License) store.ResetPolicy {
 	return store.ResetPolicy{
-		Enforce:     l.MaxDevices == 1 && s.cfg.Reset.Enabled,
+		Enforce:     s.cfg.Reset.Enabled,
 		CooldownSec: int64(s.cfg.Reset.CooldownDays) * 86400,
 		Lifetime:    s.cfg.Reset.LifetimeLimit,
 	}

@@ -128,6 +128,16 @@ var migrations = []struct {
 			`ALTER TABLE licenses ADD COLUMN last_reset_at INTEGER NOT NULL DEFAULT 0`,
 		},
 	},
+	{
+		version: 4,
+		stmts: []string{
+			`CREATE INDEX sessions_status_lease ON sessions(status, lease_exp)`,
+			`CREATE INDEX sessions_last_hb ON sessions(last_hb_at)`,
+			`CREATE INDEX devices_license_status ON devices(license_id, status)`,
+			`CREATE INDEX nonces_license_fp ON nonces(license_id, fingerprint)`,
+			`CREATE INDEX oob_expires ON oob_codes(expires_at)`,
+		},
+	},
 }
 
 func migrate(db *sql.DB) error {

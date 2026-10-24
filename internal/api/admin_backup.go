@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"os"
+	"time"
 
 	"eventhorizon/internal/store"
 )
@@ -47,5 +48,7 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request, actor strin
 	name := "eh-backup-" + now.UTC().Format("20060102-150405") + ".db"
 	w.Header().Set("Content-Type", "application/vnd.sqlite3")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	// A backup can exceed the server's normal write timeout.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(10 * time.Minute))
 	http.ServeContent(w, r, name, st.ModTime(), f)
 }

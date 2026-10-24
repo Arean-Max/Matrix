@@ -29,9 +29,11 @@ machine instead. Trust still comes from the server session, never from the VM.
   by the server, delivered once at `/verify`. The VM never stores or derives
   it further.
 - **Output** is a byte buffer: every `OUT` appends one 32-byte word. The host
-  reads it when the program halts.
+  reads it when the program halts; the buffer is capped at 1 MiB.
 - Determinism: same seed + same inputs + same bytecode ⇒ same output. No
   randomness, no clock, no environment, no I/O beyond the output buffer.
+- **Limits**: the stack holds at most 1024 words and the output buffer at most
+  1 MiB; exceeding either fails with `Limit`.
 - **Gas**: at most [`MAX_STEPS`] = 1,000,000 executed instructions per run.
 
 ## Bytecode layout
@@ -47,7 +49,9 @@ offset  size        meaning
 
 Parsing is strict: wrong magic, a truncated section, or any trailing byte is
 `VmError::Malformed`. There is no version negotiation inside the container —
-the magic is the version.
+the magic is the version. Encoding is checked too: `Bytecode::to_bytes`
+returns an error if the constant count does not fit `u16` or the code length
+does not fit `u32`.
 
 ## Instruction set
 
@@ -68,14 +72,15 @@ One-byte opcodes; operands are immediate, big-endian, and read in order.
 | `SHA` | 0x0A | — | pop 1, push 1 | `SHA-256(a)` |
 | `HMAC` | 0x0B | — | pop 2, push 1 | `HMAC-SHA256(key, msg)`; the message is on top, the key below it |
 | `CMP` | 0x0C | — | pop 2, push 1 | `a == b` ? 32 × `0xFF` : 32 × `0x00` |
-| `JNZ off` | 0x0D | i16 | pop 1 | if any byte of the word is nonzero, jump to `off` bytes **after the operand**; target is checked against `0..=code_len` |
+| `JNZ off` | 0x0D | i16 | pop 1 | if any byte of the word is nonzero, jump to `off` bytes **after the operand**; the target must satisfy `0 <= target < code_len` (jumping exactly to the end is `Malformed`) |
 | `OUT` | 0x0E | — | pop 1 | append the word to the output buffer |
 | `INPUT s` | 0x0F | u8 slot | push 1 | push `inputs[s]` (zero-filled if absent) |
 
 Every opcode may fail with `StackUnderflow`, `BadConstIndex`, `BadSlot`,
-`BadOpcode`, `OutOfGas` (step limit), or `Malformed` (instruction operand
-reads past the end, or execution runs past the end of the code). These are
-bug indicators in the bytecode or the host, never environment errors.
+`BadOpcode`, `OutOfGas` (step limit), `Limit` (stack or output cap), or
+`Malformed` (instruction operand reads past the end, an out-of-range jump, or
+execution runs past the end of the code). These are bug indicators in the
+bytecode or the host, never environment errors.
 
 ## Assembler
 
@@ -89,10 +94,12 @@ It is meant for building payloads, not for shipping to clients.
   decimal (`push 3`, `load 0`, `jnz label`) or hex via `0x…` where the ISA
   says u8/u16/i16.
 - `name:` on its own line defines a label; `jnz name` computes the relative
-  offset from the end of the instruction to that label.
-- `;` starts a comment.
-- Labels cannot be forward-referenced across more than one pass — the
-  assembler resolves them after collecting all lines.
+  offset from the end of the instruction to that label. Duplicate labels are
+  rejected.
+- `;` starts a comment, except inside a quoted constant. `\"` escapes a quote
+  inside a string, so it does not end the string or start a comment.
+- Forward references are fine: the assembler collects all lines, then resolves
+  labels in a second pass.
 
 ## Examples
 

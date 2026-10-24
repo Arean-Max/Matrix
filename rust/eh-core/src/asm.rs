@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
@@ -63,13 +64,14 @@ impl Op {
 
 pub fn assemble(source: &str) -> Result<Vec<u8>, AsmError> {
     let prog = assemble_bytecode(source)?;
-    Ok(prog.to_bytes())
+    prog.to_bytes()
+        .map_err(|e| err(0, format!("cannot encode bytecode: {e}")))
 }
 
 pub fn assemble_bytecode(source: &str) -> Result<Bytecode, AsmError> {
     let mut consts: Vec<[u8; WORD]> = Vec::new();
     let mut ops: Vec<Op> = Vec::new();
-    let mut labels: Vec<(String, usize)> = Vec::new();
+    let mut labels: HashMap<String, usize> = HashMap::new();
 
     for (idx, raw) in source.lines().enumerate() {
         let line = idx + 1;
@@ -90,10 +92,10 @@ pub fn assemble_bytecode(source: &str) -> Result<Bytecode, AsmError> {
             if name.is_empty() {
                 return Err(err(line, "empty label"));
             }
-            if labels.iter().any(|(n, _)| n == name) {
+            if labels.contains_key(name) {
                 return Err(err(line, format!("duplicate label {name}")));
             }
-            labels.push((name.to_string(), ops.len()));
+            labels.insert(name.to_string(), ops.len());
             continue;
         }
 
@@ -165,7 +167,7 @@ pub fn assemble_bytecode(source: &str) -> Result<Bytecode, AsmError> {
         total += o.byte_len();
     }
     let label_offset = |name: &str| -> Option<usize> {
-        labels.iter().find(|(n, _)| n == name).map(|(_, i)| {
+        labels.get(name).map(|i| {
             if *i < offsets.len() {
                 offsets[*i]
             } else {
@@ -209,8 +211,14 @@ pub fn assemble_bytecode(source: &str) -> Result<Bytecode, AsmError> {
 
 fn strip_comment(line: &str) -> &str {
     let mut in_string = false;
+    let mut escaped = false;
     for (i, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match ch {
+            '\\' if in_string => escaped = true,
             '"' => in_string = !in_string,
             ';' if !in_string => return &line[..i],
             _ => {}
@@ -442,5 +450,18 @@ mod tests {
     fn push_past_the_const_table_is_an_error() {
         let e = assemble_bytecode(".const 0x01\npush 999\nhalt").unwrap_err();
         assert!(e.message.contains("const index"));
+    }
+
+    #[test]
+    fn escaped_quote_does_not_start_a_comment() {
+        let prog = assemble_bytecode(
+            r#".const "a\";b"
+push 0
+out
+halt"#,
+        )
+        .unwrap();
+        let out = Vm::with_seed([0u8; 32]).run(&prog).unwrap();
+        assert_eq!(&out[..5], b"a\\\";b");
     }
 }

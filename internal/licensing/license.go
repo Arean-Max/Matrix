@@ -22,6 +22,9 @@ func (s *Service) CreateLicense(req *wire.LicenseCreateRequest, actor string, no
 	if !validChannel(channel) {
 		return nil, errf(wire.CodeInvalidRequest, "channel must be \"\", \"manual\" or \"webhook:https://...\"")
 	}
+	if strings.HasPrefix(channel, "webhook:") && s.cfg.Notify.WebhookSecret == "" {
+		return nil, errf(wire.CodeInvalidRequest, "webhook channels require notify.webhook_secret")
+	}
 	max := req.MaxDevices
 	if max == 0 {
 		max = 1
@@ -60,13 +63,17 @@ func (s *Service) ListLicenses(status, query string, limit, offset int, now int6
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]string, len(ls))
+	for i, l := range ls {
+		ids[i] = l.ID
+	}
+	stats, err := s.store.LicenseStats(ids, now)
+	if err != nil {
+		return nil, err
+	}
 	views := make([]wire.LicenseView, 0, len(ls))
 	for _, l := range ls {
-		v, err := s.licenseView(l, now)
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, *v)
+		views = append(views, *licenseViewWithStats(l, stats[l.ID]))
 	}
 	total, err := s.store.CountLicensesFiltered(status, query)
 	if err != nil {
@@ -84,21 +91,21 @@ func (s *Service) GetLicense(id string, now int64) (*wire.LicenseView, error) {
 }
 
 func (s *Service) licenseView(l *store.License, now int64) (*wire.LicenseView, error) {
-	devices, err := s.store.CountTrustedDevices(l.ID)
+	stats, err := s.store.LicenseStats([]string{l.ID}, now)
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := s.store.CountActiveSessionsByLicense(l.ID, now)
-	if err != nil {
-		return nil, err
-	}
+	return licenseViewWithStats(l, stats[l.ID]), nil
+}
+
+func licenseViewWithStats(l *store.License, st store.LicenseStats) *wire.LicenseView {
 	return &wire.LicenseView{
 		ID: l.ID, Customer: l.Customer, Status: l.Status, Note: l.Note,
 		Channel: l.Channel, MaxDevices: l.MaxDevices,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
-		Devices: devices, ActiveSessions: sessions,
+		Devices: st.TrustedDevices, ActiveSessions: st.ActiveSessions,
 		ResetCount: l.ResetCount, LastResetAt: l.LastResetAt,
-	}, nil
+	}
 }
 
 func (s *Service) SetLicenseStatus(id, status, reason, actor string, now int64) error {
@@ -160,7 +167,7 @@ func (s *Service) ClearResets(id, actor string, now int64) (*wire.LicenseView, e
 }
 
 func (s *Service) RevealOOB(licenseID, actor string, now int64) (*wire.OOBView, error) {
-	code, err := s.store.CurrentOOB(licenseID)
+	code, err := s.store.CurrentOOB(licenseID, now)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, errf(wire.CodeOOBExpired, "no pending code")
 	}

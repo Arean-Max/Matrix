@@ -289,6 +289,29 @@ impl Client {
             Err(e) => return Err(e),
         };
 
+        if resp.status != wire::STATUS_ACTIVE {
+            return Err(Error::Protocol(format!(
+                "unexpected verify status {:?}",
+                resp.status
+            )));
+        }
+        if let Some(wanted) = &self.cfg.package_id {
+            match &resp.package {
+                Some(pkg) if &pkg.id == wanted => {}
+                Some(pkg) => {
+                    return Err(Error::Package(format!(
+                        "server delivered package {:?}, requested {:?}",
+                        pkg.id, wanted
+                    )))
+                }
+                None => {
+                    return Err(Error::Package(format!(
+                        "server did not return the requested package {wanted:?}"
+                    )))
+                }
+            }
+        }
+
         self.payload = None;
         self.session = Some(Session {
             id: resp.session_id.clone(),
@@ -309,8 +332,6 @@ impl Client {
                 self.payload = None;
                 return Err(e);
             }
-        } else if self.cfg.package_id.is_some() {
-            self.note("server did not return the requested package");
         }
 
         self.persist()?;
@@ -318,6 +339,14 @@ impl Client {
     }
 
     fn receive_package(&mut self, pkg: &wire::WrappedPackage) -> Result<()> {
+        if let Some(wanted) = &self.cfg.package_id {
+            if &pkg.id != wanted {
+                return Err(Error::Package(format!(
+                    "server delivered package {:?}, requested {:?}",
+                    pkg.id, wanted
+                )));
+            }
+        }
         let (key, record) = {
             let session = self
                 .session

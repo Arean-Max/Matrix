@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"eventhorizon/internal/wire"
 )
@@ -29,17 +30,28 @@ func cmdDevice(args []string) error {
 func cmdDeviceList(args []string) error {
 	fs, g := commonFS("ehctl device list")
 	licenseID := fs.String("license", "", "only devices of this license")
+	limit := fs.Int("limit", 50, "maximum devices to return (1..200)")
+	offset := fs.Int("offset", 0, "skip this many devices")
 	if err := parse(fs, args); err != nil {
 		return err
+	}
+	if *limit < 1 || *limit > 200 {
+		return errors.New("--limit must be between 1 and 200")
+	}
+	if *offset < 0 {
+		return errors.New("--offset must be >= 0")
 	}
 	c, err := newClient(g, true)
 	if err != nil {
 		return err
 	}
-	path := "/admin/v1/devices"
+	q := url.Values{}
 	if *licenseID != "" {
-		path += "?license_id=" + url.QueryEscape(*licenseID)
+		q.Set("license_id", *licenseID)
 	}
+	q.Set("limit", strconv.Itoa(*limit))
+	q.Set("offset", strconv.Itoa(*offset))
+	path := "/admin/v1/devices?" + q.Encode()
 	var resp wire.DeviceListResponse
 	if err := fetch(c, path, &resp); err != nil {
 		return err
@@ -51,6 +63,9 @@ func cmdDeviceList(args []string) error {
 		}
 		if len(resp.Devices) == 0 {
 			fmt.Println("no devices")
+		}
+		if resp.Total > *offset+len(resp.Devices) {
+			fmt.Printf("showing %d-%d of %d\n", *offset+1, *offset+len(resp.Devices), resp.Total)
 		}
 	})
 }

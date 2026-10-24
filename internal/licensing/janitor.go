@@ -35,4 +35,19 @@ func (s *Service) janitorTick(now int64, onErr func(error)) {
 	if _, err := s.store.DeleteStaleOOB(now); err != nil && onErr != nil {
 		onErr(err)
 	}
+	if d := s.cfg.Retention.SessionDays; d > 0 {
+		if _, err := s.store.DeleteOldSessions(now, now-int64(d)*86400); err != nil && onErr != nil {
+			onErr(err)
+		}
+	}
+	if d := s.cfg.Retention.AuditDays; d > 0 {
+		if _, err := s.store.DeleteOldAudits(now - int64(d)*86400); err != nil && onErr != nil {
+			onErr(err)
+		}
+	}
+	if d := s.cfg.Retention.DeviceDays; d > 0 {
+		if _, err := s.store.DeleteOldDevices(now - int64(d)*86400); err != nil && onErr != nil {
+			onErr(err)
+		}
+	}
 }

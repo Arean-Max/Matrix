@@ -162,7 +162,7 @@ Encryption policy:
 |---|---|---|
 | Network | hostile | TLS 1.2+, optional SPKI pin, request caps, rate limits |
 | Client machine | untrusted | nothing believed without TPM proof; fingerprint is a hint |
-| Admin plane | strong auth | argon2id bearer tokens and/or mTLS; every action audited |
+| Admin plane | strong auth | argon2id bearer tokens and/or mTLS with a certificate-CN allowlist; every action audited |
 | Provision files | operator secret | gitignored, imported once, stored encrypted |
 | Database file | semi-trusted | field encryption; HMACs for lookup keys |
 
@@ -176,7 +176,7 @@ answer.
 |---|---|---|
 | SQLite unavailable or corrupt | All endpoints fail and readiness returns 503; there is no safe read-only mode | restore the DB, restart, inspect the readiness log |
 | `eh-trustd` exits or times out | New quote/activation requests fail closed; already-issued sessions, heartbeats, admin and CLI keep working | client restarts on the next request; readiness still reports `trustd` as the configured backend |
-| Webhook delivery fails | The OOB code stays in the DB; activation still returns `oob_required`; delivery failure is audited | admin reveals the code with `ehctl licenses oob show` (audited) |
+| Webhook delivery fails | The OOB code stays in the DB; activation still returns `oob_required`; delivery failure is audited | admin reveals the code with `ehctl license oob` (audited) |
 | Janitor SQL error or panic | Cleanup is delayed; API traffic is unaffected; the panic is logged and the loop continues | inspect the log; no restart required for a transient error |
 | Rate-limiter GC failure | Old buckets linger; requests still work | restart only if memory growth is observed |
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -32,15 +33,62 @@ type Notifier struct {
 }
 
 func New(timeout time.Duration, secret string) *Notifier {
+	transport := &http.Transport{
+		DialContext:           safeDialContext,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+	}
 	return &Notifier{
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
 		secret: []byte(secret),
 	}
+}
+
+// safeDialContext refuses loopback, private, link-local, multicast and
+// unspecified destinations. It dials the address that was checked, so a
+// second DNS answer cannot redirect the request into an internal network.
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("notify: %s has no addresses", host)
+	}
+	for _, ip := range ips {
+		if !publicIP(ip.IP) {
+			return nil, fmt.Errorf("notify: refusing non-public address %s", ip.IP)
+		}
+	}
+	d := &net.Dialer{}
+	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+}
+
+func publicIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	// 0.0.0.0/8 and 100.64.0.0/10 are not covered by net.IP.IsPrivate.
+	if v4 := ip.To4(); v4 != nil {
+		if v4[0] == 0 {
+			return false
+		}
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func (n *Notifier) Send(ctx context.Context, target string, ev Event) error {
@@ -51,6 +99,9 @@ func (n *Notifier) Send(ctx context.Context, target string, ev Event) error {
 		url := strings.TrimPrefix(target, "webhook:")
 		if !strings.HasPrefix(url, "https://") {
 			return fmt.Errorf("notify: webhook target must be https: %q", url)
+		}
+		if len(n.secret) == 0 {
+			return errors.New("notify: webhook_secret is required for webhook delivery")
 		}
 		return n.post(ctx, url, ev)
 	default:

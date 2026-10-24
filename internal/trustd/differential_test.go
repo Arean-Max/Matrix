@@ -389,8 +389,8 @@ func TestTrustdRequiresStandardPSSSalt(t *testing.T) {
 	raw = appendU16(raw, 0x000B)
 	raw = appendSized(raw, sig)
 
-	if _, err := attestation.VerifyQuote(attest, raw, area, hex.EncodeToString(name), nonce); err != nil {
-		t.Fatalf("embedded verifier rejected max-salt pss: %v", err)
+	if _, err := attestation.VerifyQuote(attest, raw, area, hex.EncodeToString(name), nonce); err == nil {
+		t.Fatal("embedded verifier accepted max-salt pss")
 	}
 	if _, err := client.VerifyQuote(attest, raw, area, hex.EncodeToString(name), nonce); err == nil {
 		t.Fatal("trustd accepted max-salt pss")

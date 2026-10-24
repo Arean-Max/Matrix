@@ -161,7 +161,7 @@ func (c *client) do(method, path string, in, out any) error {
 }
 
 func (c *client) download(path string, w io.Writer) error {
-	req, err := http.NewRequest(http.MethodGet, c.base+path, nil)
+	req, err := http.NewRequest(http.MethodPost, c.base+path, nil)
 	if err != nil {
 		return err
 	}

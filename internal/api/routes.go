@@ -39,7 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/v1/tokens", s.admin("read", s.adminListTokens))
 	mux.HandleFunc("POST /admin/v1/tokens/{id}/revoke", s.admin("admin", s.adminRevokeToken))
 	mux.HandleFunc("GET /admin/v1/status", s.admin("read", s.adminStatus))
-	mux.HandleFunc("GET /admin/v1/backup", s.admin("admin", s.adminBackup))
+	mux.HandleFunc("POST /admin/v1/backup", s.admin("admin", s.adminBackup))
 
 	return reqid.Middleware(s.common(s.protocol(mux)))
 }

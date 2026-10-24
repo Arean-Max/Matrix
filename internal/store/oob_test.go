@@ -1,11 +1,48 @@
 package store
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
 	"eventhorizon/internal/cryptox"
 )
+
+func TestBindDeviceWithOOBIsAtomic(t *testing.T) {
+	s, _ := testStore(t)
+	l := newLicense(t, s)
+	fpC := "ef" + fpA[2:]
+	pol := ResetPolicy{Enforce: true, CooldownSec: 1000, Lifetime: 5}
+
+	if _, _, err := s.BindDevice(l.ID, fpA, cryptox.RandomHex(16), 1, 1000, pol); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.BindDevice(l.ID, fpB, cryptox.RandomHex(16), 1, 1500, pol); err != nil {
+		t.Fatal(err)
+	}
+	o := &OOBCode{
+		ID: cryptox.RandomHex(16), LicenseID: l.ID, Fingerprint: fpC,
+		Code: "12345678", CodeHMAC: cryptox.Random(32),
+		CreatedAt: 1600, ExpiresAt: 9000,
+	}
+	if err := s.CreateOOB(o); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := s.BindDeviceWithOOB(l.ID, fpC, cryptox.RandomHex(16), o.ID, 1, 2000, pol); err == nil {
+		t.Fatal("bind that should hit the reset cooldown succeeded")
+	}
+	cur, err := s.LatestUnconsumedOOB(l.ID, fpC)
+	if err != nil || cur.ID != o.ID {
+		t.Fatalf("failed bind consumed the OOB code: %+v, %v", cur, err)
+	}
+	if _, _, err := s.BindDeviceWithOOB(l.ID, fpC, cryptox.RandomHex(16), o.ID, 1, 3000, pol); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LatestUnconsumedOOB(l.ID, fpC); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("successful bind left the code pending: %v", err)
+	}
+}
 
 func TestOOBFlow(t *testing.T) {
 	s, _ := testStore(t)
@@ -56,7 +93,7 @@ func TestOOBFlow(t *testing.T) {
 	if err := s.CreateOOB(o2); err != nil {
 		t.Fatal(err)
 	}
-	cur, err := s.CurrentOOB(l.ID)
+	cur, err := s.CurrentOOB(l.ID, 3000)
 	if err != nil || cur.ID != o2.ID || cur.NotifiedAt != 2200 {
 		t.Fatalf("CurrentOOB = %+v, %v", cur, err)
 	}
@@ -70,7 +107,7 @@ func TestOOBFlow(t *testing.T) {
 	if attempts, lockedUntil, err := s.OOBState(l.ID, fpA); err != nil || attempts != 0 || lockedUntil != 0 {
 		t.Fatalf("unlock did not clear state: %d, %d, %v", attempts, lockedUntil, err)
 	}
-	cur, _ = s.CurrentOOB(l.ID)
+	cur, _ = s.CurrentOOB(l.ID, 3000)
 	if cur.NotifiedAt != 2300 {
 		t.Fatalf("notified_at not updated: %+v", cur)
 	}

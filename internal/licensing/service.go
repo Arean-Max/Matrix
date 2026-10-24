@@ -3,6 +3,7 @@ package licensing
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"eventhorizon/internal/attestation"
@@ -87,9 +88,14 @@ func (s *Service) licenseByKey(key string) (*store.License, error) {
 	return l, nil
 }
 
-func (s *Service) audit(action, actor, licenseID, deviceID, detail string, now int64) {
-	_ = s.store.AddAudit(&store.Audit{
+func (s *Service) audit(action, actor, licenseID, deviceID, detail string, now int64) error {
+	err := s.store.AddAudit(&store.Audit{
 		TS: now, Actor: actor, Action: action,
 		LicenseID: licenseID, DeviceID: deviceID, Detail: detail,
 	})
+	if err != nil {
+		slog.Default().Error("audit write failed",
+			"action", action, "license_id", licenseID, "device_id", deviceID, "error", err)
+	}
+	return err
 }

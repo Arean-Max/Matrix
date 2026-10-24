@@ -135,6 +135,60 @@ func TestValidationOfModes(t *testing.T) {
 	}
 }
 
+func TestMTLSAdminAllowlistValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.TLS.CertFile = "cert.pem"
+	cfg.TLS.KeyFile = "key.pem"
+	cfg.TLS.ClientCAFile = "ca.pem"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("client CA without an admin CN allowlist was accepted")
+	}
+	cfg.Security.MTLSAdminCNs = []string{"ops-admin"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid mTLS config rejected: %v", err)
+	}
+	cfg.Security.MTLSAdminCNs = []string{" "}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("empty admin CN was accepted")
+	}
+	cfg.TLS.ClientCAFile = ""
+	cfg.Security.MTLSAdminCNs = []string{"ops-admin"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("admin CN allowlist without a client CA was accepted")
+	}
+}
+
+func TestMTLSAdminCNEnv(t *testing.T) {
+	t.Setenv("EH_TLS_ADMIN_CNS", "ops-admin, backup-admin")
+	cfg := Default()
+	applyEnv(cfg)
+	if len(cfg.Security.MTLSAdminCNs) != 2 ||
+		cfg.Security.MTLSAdminCNs[0] != "ops-admin" ||
+		cfg.Security.MTLSAdminCNs[1] != "backup-admin" {
+		t.Fatalf("admin CN env = %#v", cfg.Security.MTLSAdminCNs)
+	}
+}
+
+func TestRetentionAndWebhookValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.Retention.AuditDays = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("negative retention was accepted")
+	}
+	cfg = Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.Notify.WebhookURL = "https://hooks.example.invalid/eh"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("webhook URL without a secret was accepted")
+	}
+	cfg.Notify.WebhookSecret = "secret"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid webhook config rejected: %v", err)
+	}
+}
+
 func TestMasterKeyFromEnv(t *testing.T) {
 	key := make([]byte, 32)
 	for i := range key {

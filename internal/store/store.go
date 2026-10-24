@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -13,6 +15,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrConflict = errors.New("concurrent update")
 
 var (
 	ErrResetCooldown = errors.New("hwid reset cooldown active")
@@ -53,15 +56,28 @@ func Open(path string, fieldKey []byte) (*Store, error) {
 	if len(fieldKey) != 32 {
 		return nil, fmt.Errorf("store: field key must be 32 bytes, got %d", len(fieldKey))
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// The driver treats the DSN as a URI; resolve relative paths first and
+	// percent-escape the path so '?' or '#' cannot become URL syntax.
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("store: resolve path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return nil, fmt.Errorf("store: create data dir: %w", err)
 	}
-	dsn := "file:" + filepath.ToSlash(path) +
-		"?_pragma=busy_timeout(5000)" +
-		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=foreign_keys(1)" +
-		"&_pragma=synchronous(NORMAL)" +
-		"&_txlock=immediate"
+	p := filepath.ToSlash(abs)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	u := url.URL{Scheme: "file", Path: p}
+	q := u.Query()
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+	q.Set("_txlock", "immediate")
+	u.RawQuery = q.Encode()
+	dsn := u.String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open: %w", err)
@@ -72,11 +88,11 @@ func Open(path string, fieldKey []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(abs, 0o600); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: restrict database permissions: %w", err)
 	}
-	if dir := filepath.Dir(path); dir != "." {
+	if dir := filepath.Dir(abs); dir != "." {
 		if err := os.Chmod(dir, 0o700); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("store: restrict data dir permissions: %w", err)

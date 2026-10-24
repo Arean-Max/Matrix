@@ -59,12 +59,41 @@ func TestBindDeviceReleasesOld(t *testing.T) {
 	if err := s.SetDeviceStatus("nope", DeviceRevoked, 4000); err != ErrNotFound {
 		t.Fatal("unknown device did not return ErrNotFound")
 	}
-	devices, _ := s.DevicesByLicense(l.ID)
+	devices, _ := s.DevicesByLicense(l.ID, 50, 0)
 	if len(devices) != 2 {
 		t.Fatalf("DevicesByLicense = %d", len(devices))
 	}
 	if n, _ := s.CountTrustedDevices(l.ID); n != 0 {
 		t.Fatalf("CountTrustedDevices = %d", n)
+	}
+}
+
+func TestResetDeviceOnlyTargetsOneFingerprint(t *testing.T) {
+	s, _ := testStore(t)
+	l := newLicense(t, s)
+	if _, err := s.db.Exec(`UPDATE licenses SET max_devices = 3 WHERE id = ?`, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	fpC := strings.Repeat("ee", 32)
+	pol := ResetPolicy{Enforce: true, CooldownSec: 1000, Lifetime: 5}
+	for i, fp := range []string{fpA, fpB, fpC} {
+		if _, _, err := s.BindDevice(l.ID, fp, cryptox.RandomHex(16), 3, int64(1000+i), pol); err != nil {
+			t.Fatal(err)
+		}
+	}
+	released, err := s.ResetDevice(l.ID, fpB, 3000, pol)
+	if err != nil || released != 1 {
+		t.Fatalf("ResetDevice = %d, %v", released, err)
+	}
+	for _, fp := range []string{fpA, fpC} {
+		d, err := s.DeviceByFingerprint(l.ID, fp)
+		if err != nil || d.Status != DeviceTrusted {
+			t.Fatalf("unrelated device %s = %+v, %v", fp[:4], d, err)
+		}
+	}
+	d, err := s.DeviceByFingerprint(l.ID, fpB)
+	if err != nil || d.Status != DeviceReleased {
+		t.Fatalf("target device = %+v, %v", d, err)
 	}
 }
 
@@ -101,8 +130,8 @@ func TestResetQuotaAndCooldown(t *testing.T) {
 	if err != nil || cleared != 2 {
 		t.Fatalf("ClearResetCounters = %d, %v", cleared, err)
 	}
-	if released, err := s.ResetLicenseDevices(l.ID, 6000, pol); err != nil || released != 1 {
-		t.Fatalf("ResetLicenseDevices = %d, %v", released, err)
+	if released, err := s.ResetDevice(l.ID, fpC, 6000, pol); err != nil || released != 1 {
+		t.Fatalf("ResetDevice = %d, %v", released, err)
 	}
 	lic, _ = s.LicenseByID(l.ID)
 	if lic.ResetCount != 1 || lic.LastResetAt != 6000 {

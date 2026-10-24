@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -28,13 +29,16 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("active session touched: %+v", s2after)
 	}
 
-	if err := s.UpdateSessionHeartbeat(s2.ID, 7, "ack7", "ack6", 3100, 6000); err != nil {
+	if err := s.UpdateSessionHeartbeat(s2.ID, 0, s2.LastAck, 7, "ack7", "ack6", 3100, 6000); err != nil {
 		t.Fatal(err)
 	}
 	s2after, _ = s.SessionByID(s2.ID)
 	if s2after.LastSeq != 7 || s2after.LastAck != "ack7" || s2after.PriorAck != "ack6" ||
 		s2after.LastHBAt != 3100 || s2after.LeaseExp != 6000 {
 		t.Fatalf("heartbeat not stored: %+v", s2after)
+	}
+	if err := s.UpdateSessionHeartbeat(s2.ID, 0, s2.LastAck, 8, "ack8", "ack7", 3200, 7000); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale heartbeat update = %v, want ErrConflict", err)
 	}
 
 	cnt, _ := s.ActiveSessionCountByDevice(d.ID, 3500)

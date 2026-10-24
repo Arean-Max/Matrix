@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,10 +67,47 @@ func TestWebhookFailure(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	n := New(time.Second, "")
+	n := New(time.Second, "secret")
 	n.client = srv.Client()
 	if err := n.Send(context.Background(), "webhook:"+srv.URL, Event{}); err == nil {
 		t.Fatal("500 response treated as success")
+	}
+}
+
+func TestWebhookRequiresSecret(t *testing.T) {
+	n := New(time.Second, "")
+	if err := n.Send(context.Background(), "webhook:https://example.com/hook", Event{}); err == nil {
+		t.Fatal("webhook without a secret was accepted")
+	}
+}
+
+func TestWebhookRejectsNonPublicAddresses(t *testing.T) {
+	n := New(time.Second, "secret")
+	if err := n.Send(context.Background(), "webhook:https://127.0.0.1:1/hook", Event{}); err == nil {
+		t.Fatal("loopback webhook was accepted")
+	}
+}
+
+func TestPublicIPPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		ip   string
+		want bool
+	}{
+		{"8.8.8.8", true},
+		{"2606:4700:4700::1111", true},
+		{"127.0.0.1", false},
+		{"10.1.2.3", false},
+		{"172.16.0.1", false},
+		{"192.168.1.1", false},
+		{"169.254.169.254", false},
+		{"100.64.0.1", false},
+		{"0.1.2.3", false},
+		{"::1", false},
+		{"fc00::1", false},
+	} {
+		if got := publicIP(net.ParseIP(tc.ip)); got != tc.want {
+			t.Errorf("publicIP(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
 	}
 }
 

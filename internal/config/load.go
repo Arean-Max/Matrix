@@ -46,6 +46,14 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("EH_TLS_CLIENT_CA"); v != "" {
 		c.TLS.ClientCAFile = v
 	}
+	if v := os.Getenv("EH_TLS_ADMIN_CNS"); v != "" {
+		c.Security.MTLSAdminCNs = nil
+		for _, cn := range strings.Split(v, ",") {
+			if cn = strings.TrimSpace(cn); cn != "" {
+				c.Security.MTLSAdminCNs = append(c.Security.MTLSAdminCNs, cn)
+			}
+		}
+	}
 	if v := os.Getenv("EH_ATTESTATION_MODE"); v != "" {
 		c.Attestation.Mode = v
 	}

@@ -26,10 +26,16 @@ func (s *Server) admin(minRole string, next adminHandler) http.HandlerFunc {
 		actor, role, err := s.authenticate(r)
 		if err != nil {
 			if errors.Is(err, errUnauthenticated) {
-				_ = s.store.AddAudit(&store.Audit{
-					TS: s.now().Unix(), Actor: "unknown", Action: store.AuditAuthFail,
-					Detail: clientIP(r),
-				})
+				// Cap auth.fail rows per source so a distributed password
+				// spray cannot grow the audit table without bound.
+				if ok, _ := s.ip.AllowRetry("authfail:"+clientIP(r), 1.0/60, 5); ok {
+					if auditErr := s.store.AddAudit(&store.Audit{
+						TS: s.now().Unix(), Actor: "unknown", Action: store.AuditAuthFail,
+						Detail: clientIP(r),
+					}); auditErr != nil {
+						s.log.Error("audit auth failure", "error", auditErr)
+					}
+				}
 				s.writeError(w, r, &httpError{
 					status:  http.StatusUnauthorized,
 					code:    wire.CodeUnauthorized,
@@ -55,10 +61,11 @@ func (s *Server) admin(minRole string, next adminHandler) http.HandlerFunc {
 func (s *Server) authenticate(r *http.Request) (actor, role string, err error) {
 	if s.useMTLS && r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
-		if cn == "" {
-			cn = "mtls-client"
+		if s.mtlsAdmin(cn) {
+			return "mtls:" + cn, "admin", nil
 		}
-		return "mtls:" + cn, "admin", nil
+		// A valid certificate from the client CA is not enough on its own:
+		// fall through to bearer authentication.
 	}
 	header := r.Header.Get("Authorization")
 	raw, found := strings.CutPrefix(header, "Bearer ")
@@ -97,6 +104,18 @@ func (s *Server) authenticate(r *http.Request) (actor, role string, err error) {
 		}
 	}
 	return "", "", errUnauthenticated
+}
+
+func (s *Server) mtlsAdmin(cn string) bool {
+	if cn == "" {
+		return false
+	}
+	for _, allowed := range s.cfg.Security.MTLSAdminCNs {
+		if subtle.ConstantTimeCompare([]byte(cn), []byte(allowed)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func clientIP(r *http.Request) string {

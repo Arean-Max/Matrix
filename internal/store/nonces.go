@@ -17,6 +17,14 @@ type Nonce struct {
 }
 
 func (s *Store) CreateNonce(n *Nonce) error {
+	return s.CreateNonceCapped(n, 0, 0, 0, 0)
+}
+
+// CreateNonceCapped inserts a nonce while keeping the pending table bounded.
+// After the insert, the oldest pending nonces for the fingerprint, the
+// license, and the whole server are evicted. A zero cap disables that
+// particular bound.
+func (s *Store) CreateNonceCapped(n *Nonce, now int64, perFingerprint, perLicense, global int) error {
 	enc, err := s.sealBytes(n.ActivationSecret)
 	if err != nil {
 		return err
@@ -25,8 +33,50 @@ func (s *Store) CreateNonce(n *Nonce) error {
 	if n.Used {
 		used = 1
 	}
-	_, err = s.db.Exec(`INSERT INTO nonces (nonce, license_id, fingerprint, activation_secret_enc, ak_name, ek_hash, expires_at, used)
-		VALUES(?,?,?,?,?,?,?,?)`, n.Nonce, n.LicenseID, n.Fingerprint, enc, n.AKName, n.EKHash, n.ExpiresAt, used)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if now > 0 {
+		if _, err := tx.Exec(`DELETE FROM nonces WHERE used = 1 OR expires_at <= ?`, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO nonces (nonce, license_id, fingerprint, activation_secret_enc, ak_name, ek_hash, expires_at, used)
+		VALUES(?,?,?,?,?,?,?,?)`, n.Nonce, n.LicenseID, n.Fingerprint, enc, n.AKName, n.EKHash, n.ExpiresAt, used); err != nil {
+		return err
+	}
+	if perFingerprint > 0 {
+		if err := evictNonces(tx, `license_id = ? AND fingerprint = ?`, perFingerprint, n.LicenseID, n.Fingerprint); err != nil {
+			return err
+		}
+	}
+	if perLicense > 0 {
+		if err := evictNonces(tx, `license_id = ?`, perLicense, n.LicenseID); err != nil {
+			return err
+		}
+	}
+	if global > 0 {
+		if err := evictNonces(tx, `1 = 1`, global); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func evictNonces(tx *sql.Tx, where string, keep int, args ...any) error {
+	if keep < 1 {
+		return nil
+	}
+	query := `DELETE FROM nonces WHERE used = 0 AND nonce NOT IN (
+		SELECT nonce FROM nonces WHERE used = 0 AND ` + where + `
+		ORDER BY expires_at DESC, nonce DESC LIMIT ?
+	) AND ` + where
+	qargs := append([]any{}, args...)
+	qargs = append(qargs, keep)
+	qargs = append(qargs, args...)
+	_, err := tx.Exec(query, qargs...)
 	return err
 }
 
@@ -71,5 +121,13 @@ func (s *Store) DeleteStaleNonces(now int64) (int64, error) {
 func (s *Store) CountPendingNonces(now int64) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM nonces WHERE used = 0 AND expires_at > ?`, now).Scan(&n)
+	return n, err
+}
+
+func (s *Store) CountPendingNoncesFor(licenseID, fp string, now int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM nonces
+		WHERE license_id = ? AND fingerprint = ? AND used = 0 AND expires_at > ?`,
+		licenseID, fp, now).Scan(&n)
 	return n, err
 }

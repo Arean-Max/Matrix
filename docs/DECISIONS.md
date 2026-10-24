@@ -48,11 +48,14 @@ closes one specific v1 finding.
 
 ## ADR-006 — Admin authentication
 **Decision.** argon2id-hashed bearer tokens created via `ehctl tokens
-create`, and/or mTLS against an admin CA. A SHA-256 lookup hash selects a
-single row before the memory-hard verification; legacy rows are backfilled on
-first successful use. Bootstrap token written once to
-`data/bootstrap.token` (0600), disabled after the first API-created token.
-Every admin action and failed admin authentication is audited.
+create`, and/or mTLS against an admin CA. mTLS certificates are accepted only
+when their CN is listed in `security.mtls_admin_cns`; a valid certificate from
+the CA is not sufficient by itself. A SHA-256 lookup hash selects a single row
+before the memory-hard verification; legacy rows are backfilled on first
+successful use. Bootstrap token written once to `data/bootstrap.token` (0600),
+disabled after the first API-created token and deleted immediately; a stale
+file is removed on the next start. Every admin action and failed admin
+authentication is audited, with `auth.fail` rows capped per source address.
 **Why.** v1's "session header ≥32 chars" accepted anything. There is no
 third mode; no fake checks. The lookup keeps unauthenticated requests from
 multiplying Argon2 work across every stored token.
@@ -222,10 +225,11 @@ hardening items. This ADR records what was adopted and what was rejected.
 **Adopted (verifiable, testable, no new trust assumptions).**
 - `X-EH-Protocol` negotiation with a single supported version, rejected
   before body decoding (`protocol_unsupported`, no fallback).
-- HWID reset accounting: one reset per displaced trusted device on
-  single-device licenses, 30-day cooldown, three lifetime resets, atomic
-  check-increment-release in SQLite, suspension on exhaustion, admin
-  `clear-resets`. OOB is still required for every re-bind.
+- HWID reset accounting: one reset per binding or explicit reset that
+  releases a trusted device, on every license size, 30-day cooldown, three
+  lifetime resets, atomic check-increment-release in SQLite, suspension on
+  exhaustion, admin `clear-resets`. A client reset names one fingerprint and
+  releases only that device. OOB is still required for every re-bind.
 - AK attribute policy (`restricted`, `sign`, `fixedTPM`, `fixedParent`,
   `sensitiveDataOrigin`) — already enforced by `internal/attestation`; for
   the primary-key design (ADR-019) this is the meaningful subset of the
@@ -296,10 +300,11 @@ a run with the desktop at 82% CPU roughly doubled both sides, while the
 ordering and the allocation gap held.
 
 **Limits, tested and documented.** RSA ≥2048 with PKCS#1/PSS and SHA-256/384;
-ECDSA P-256/SHA-256 and P-384/SHA-384. PSS salt length must equal the digest
-size (TPM 2.0 behaviour); the embedded Go verifier is more permissive, so
-trustd is strictly narrower. `MakeCredential` (credential activation, which
-parses the client's EK public area) stays in Go until its path is split too.
+ECDSA P-256/SHA-256 and P-384/SHA-384 with matching curve/hash pairs. PSS
+salt length must equal the digest size, and non-standard salts are rejected by
+both verifiers (TPM 2.0 behaviour). `MakeCredential` (credential activation,
+which parses the client's EK public area) stays in Go until its path is split
+too.
 Embedded mode remains fully supported; the daemon is an operator choice, not a
 hard dependency.
 

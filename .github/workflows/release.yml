@@ -1,0 +1,99 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.0
+
+      - name: Build and package release binaries
+        run: |
+          mkdir -p dist/bin-win dist/bin-lin dist/release
+
+          echo "==> Building Linux amd64 (Go)..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-lin/eh-server ./cmd/eh-server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-lin/ehctl ./cmd/ehctl
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-lin/eh-builder ./cmd/eh-builder
+
+          echo "==> Building Windows amd64 (Go)..."
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-win/eh-server.exe ./cmd/eh-server
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-win/ehctl.exe ./cmd/ehctl
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o dist/bin-win/eh-builder.exe ./cmd/eh-builder
+
+          echo "==> Packaging Linux distribution..."
+          tar -czf dist/release/event-horizon-v1.0.0-linux-amd64.tar.gz \
+            -C dist/bin-lin eh-server ehctl eh-builder \
+            -C ../../deploy eh-server.service docker-compose.yml backup.sh \
+            -C ../../deploy/config server.example.yaml \
+            -C ../.. README.md LICENSE-APACHE LICENSE-MIT
+
+          echo "==> Packaging Windows distribution..."
+          cd dist/bin-win
+          cp ../../deploy/config/server.example.yaml .
+          cp ../../README.md .
+          cp ../../LICENSE-APACHE .
+          cp ../../LICENSE-MIT .
+          zip -9 ../release/event-horizon-v1.0.0-windows-amd64.zip eh-server.exe ehctl.exe eh-builder.exe server.example.yaml README.md LICENSE-APACHE LICENSE-MIT
+          cd ../..
+
+          echo "==> Generating SHA256 checksums..."
+          cd dist/release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ../..
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@c95fe148935b9c7a2d3edd447aa9416167f74483 # v2.2.1
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Event Horizon ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            ## Event Horizon Production Release
+
+            Self-hosted software licensing with TPM-assisted device attestation for Windows applications.
+
+            ### Security & Hardening Properties
+            - **Reproducible & Stripped**: Built with `-trimpath` (zero host path leakage) and `-ldflags="-s -w -buildid="` (DWARF & symbol stripped).
+            - **Pure Go / Static**: `CGO_ENABLED=0` eliminates dynamic loader and DLL hijacking surfaces.
+            - **Hardware Attestation**: TPM 2.0 quote parsing with fresh AK and TOFU EK enrollment.
+            - **Transport Hardening**: Mandatory TLS with SPKI certificate pinning (`ureq + rustls 0.23`).
+
+            ### SHA256 Checksums
+            Verify release archives before deployment:
+            ```
+            ${{ steps.build-release.outputs.sha256 || 'See SHA256SUMS.txt attached' }}
+            ```
+          files: |
+            dist/release/event-horizon-v1.0.0-windows-amd64.zip
+            dist/release/event-horizon-v1.0.0-linux-amd64.tar.gz
+            dist/release/SHA256SUMS.txt
+          draft: false
+          prerelease: false

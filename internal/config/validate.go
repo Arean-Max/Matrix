@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 )
@@ -17,6 +18,9 @@ func (c *Config) Validate() error {
 	}
 	if !c.Security.DevAllowHTTP && (c.TLS.CertFile == "" || c.TLS.KeyFile == "") {
 		return errors.New("tls.cert_file and tls.key_file are required (or set security.dev_allow_http for development)")
+	}
+	if c.Security.DevAllowHTTP && !isLoopbackHost(c.Listen) {
+		return errors.New("security.dev_allow_http is only permitted on loopback listen addresses (127.0.0.1, localhost, ::1)")
 	}
 	if c.TLS.ClientCAFile != "" && c.TLS.CertFile == "" {
 		return errors.New("tls.client_ca_file needs tls.cert_file")
@@ -85,3 +89,17 @@ func isHex64(s string) bool {
 	_, err := hex.DecodeString(s)
 	return err == nil
 }
+
+func isLoopbackHost(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	h := strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	if h == "127.0.0.1" || h == "localhost" || h == "::1" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+

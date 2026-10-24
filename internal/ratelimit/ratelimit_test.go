@@ -50,3 +50,15 @@ func TestStartGCStops(t *testing.T) {
 		t.Fatalf("GC did not evict idle bucket: %d", l.Len())
 	}
 }
+
+func TestBoundedCapacity(t *testing.T) {
+	l := New()
+	l.SetMaxBuckets(50)
+	for i := 0; i < 200; i++ {
+		l.Allow(time.Duration(i).String(), 60, 1)
+	}
+	if l.Len() > 50 {
+		t.Fatalf("bucket count %d exceeded max limit 50", l.Len())
+	}
+}
+

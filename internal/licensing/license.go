@@ -42,7 +42,9 @@ func (s *Service) CreateLicense(req *wire.LicenseCreateRequest, actor string, no
 	if err := s.store.CreateLicense(l); err != nil {
 		return nil, err
 	}
-	s.audit(store.AuditLicenseCreate, actor, l.ID, "", customer, now)
+	if err := s.audit(store.AuditLicenseCreate, actor, l.ID, "", customer, now); err != nil {
+		return nil, err
+	}
 	return &wire.LicenseCreateResponse{ID: l.ID, LicenseKey: key}, nil
 }
 
@@ -147,8 +149,7 @@ func (s *Service) SetLicenseStatus(id, status, reason, actor string, now int64) 
 		store.LicenseActive:    store.AuditLicenseResume,
 		store.LicenseRevoked:   store.AuditLicenseRevoke,
 	}[status]
-	s.audit(action, actor, id, "", reason, now)
-	return nil
+	return s.audit(action, actor, id, "", reason, now)
 }
 
 func (s *Service) ClearResets(id, actor string, now int64) (*wire.LicenseView, error) {

@@ -34,8 +34,7 @@ func (s *Service) ImportPackage(req *wire.PackageImportRequest, actor string, no
 	if err := s.store.UpsertPackage(p); err != nil {
 		return err
 	}
-	s.audit(store.AuditPackageImport, actor, "", "", req.ID, now)
-	return nil
+	return s.audit(store.AuditPackageImport, actor, "", "", req.ID, now)
 }
 
 func (s *Service) ListPackages() (*wire.PackageListResponse, error) {
@@ -57,6 +56,5 @@ func (s *Service) RevokePackage(id, actor string, now int64) error {
 	if err := s.store.SetPackageStatus(id, store.PackageRevoked); err != nil {
 		return err
 	}
-	s.audit(store.AuditPackageRevoke, actor, "", "", id, now)
-	return nil
+	return s.audit(store.AuditPackageRevoke, actor, "", "", id, now)
 }

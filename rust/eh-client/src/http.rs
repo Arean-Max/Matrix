@@ -88,7 +88,7 @@ impl Http {
             return Err(decode_error(status, &raw));
         }
         serde_json::from_slice::<R>(&raw)
-            .map_err(|e| Error::Protocol(format!("decode response: {e} (body {raw:?})")))
+            .map_err(|e| Error::Protocol(format!("decode response: {e}")))
     }
 }
 
@@ -100,7 +100,7 @@ fn decode_error(status: u16, raw: &[u8]) -> Error {
         return Error::Api {
             status,
             code: "bad_response".into(),
-            message: format!("non-JSON error body: {}", String::from_utf8_lossy(raw)),
+            message: "non-JSON error body".into(),
             retry_after_s: 0,
         };
     };

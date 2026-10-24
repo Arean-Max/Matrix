@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
-	"strings"
 
 	"eventhorizon/internal/wire"
 )
@@ -15,11 +15,14 @@ const maxBody = 1 << 20
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	ct := r.Header.Get("Content-Type")
-	if ct != "" && !strings.HasPrefix(ct, "application/json") {
-		return nil, &httpError{
-			status:  http.StatusUnsupportedMediaType,
-			code:    wire.CodeInvalidRequest,
-			message: "Content-Type must be application/json",
+	if ct != "" {
+		mt, _, err := mime.ParseMediaType(ct)
+		if err != nil || mt != "application/json" {
+			return nil, &httpError{
+				status:  http.StatusUnsupportedMediaType,
+				code:    wire.CodeInvalidRequest,
+				message: "Content-Type must be application/json",
+			}
 		}
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))

@@ -93,9 +93,18 @@ func cmdPack(args []string) error {
 		return err
 	}
 	provJSON = append(provJSON, '\n')
-	if err := os.WriteFile(provisionPath, provJSON, 0o600); err != nil {
+	tmpProvision := provisionPath + ".tmp"
+	if err := os.WriteFile(tmpProvision, provJSON, 0o600); err != nil {
 		return err
 	}
+	_ = os.Chmod(tmpProvision, 0o600)
+	if err := os.Rename(tmpProvision, provisionPath); err != nil {
+		_ = os.Remove(provisionPath)
+		if err := os.Rename(tmpProvision, provisionPath); err != nil {
+			return err
+		}
+	}
+	_ = os.Chmod(provisionPath, 0o600)
 
 	fmt.Printf("container: %s (%d bytes)\n", containerPath, len(container))
 	fmt.Printf("provision: %s (SECRET — import then delete)\n", provisionPath)

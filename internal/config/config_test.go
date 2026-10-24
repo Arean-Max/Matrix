@@ -251,3 +251,25 @@ func TestMasterKeyExplicitFileMustExist(t *testing.T) {
 		t.Fatal("generated a master key despite an explicit missing key file")
 	}
 }
+
+func TestDevAllowHTTPRejectsPublicListen(t *testing.T) {
+	cfg := Default()
+	cfg.Security.DevAllowHTTP = true
+	cfg.Listen = "0.0.0.0:8443"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected loopback requirement for dev HTTP, got %v", err)
+	}
+	cfg.Listen = "192.168.1.50:8443"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected loopback requirement for dev HTTP on LAN IP, got %v", err)
+	}
+	cfg.Listen = "127.0.0.1:8443"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected 127.0.0.1 to be accepted, got %v", err)
+	}
+	cfg.Listen = "localhost:8443"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected localhost to be accepted, got %v", err)
+	}
+}
+

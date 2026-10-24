@@ -12,6 +12,10 @@ crate-type = ["lib", "cdylib"]
 name = "eh-demo"
 path = "src/bin/eh-demo.rs"
 
+[[bin]]
+name = "eh-guard"
+path = "src/bin/eh-guard.rs"
+
 [dependencies]
 eh-core = { path = "../eh-core" }
 sha2.workspace = true

@@ -52,9 +52,18 @@ func cmdInit(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(*out), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*out, []byte(created.Token+"\n"), 0o600); err != nil {
+	tmpToken := *out + ".tmp"
+	if err := os.WriteFile(tmpToken, []byte(created.Token+"\n"), 0o600); err != nil {
 		return err
 	}
+	_ = os.Chmod(tmpToken, 0o600)
+	if err := os.Rename(tmpToken, *out); err != nil {
+		_ = os.Remove(*out)
+		if err := os.Rename(tmpToken, *out); err != nil {
+			return err
+		}
+	}
+	_ = os.Chmod(*out, 0o600)
 	fmt.Printf("connected to eh-server %s (uptime %ds, licenses %d, devices %d)\n",
 		st.Version, st.UptimeS, st.Licenses, st.Devices)
 	fmt.Printf("admin token %q saved to %s\n", *name, *out)

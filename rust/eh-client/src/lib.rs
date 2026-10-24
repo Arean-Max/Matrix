@@ -6,6 +6,7 @@ pub mod dpapi;
 pub mod error;
 pub mod ffi;
 pub mod fingerprint;
+pub mod guard;
 pub mod http;
 pub mod packaging;
 pub mod state;
@@ -16,6 +17,7 @@ pub mod tpm;
 
 pub use client::{Activation, Client, Config, Session};
 pub use error::{Error, Result};
+pub use guard::GuardConfig;
 pub use http::HttpConfig;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

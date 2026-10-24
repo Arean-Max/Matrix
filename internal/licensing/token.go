@@ -40,7 +40,9 @@ func (s *Service) CreateToken(name, role, actor string, now int64) (*wire.TokenC
 	if err := s.store.CreateAdminToken(t); err != nil {
 		return nil, err
 	}
-	s.audit(store.AuditTokenCreate, actor, "", "", name+" ("+role+")", now)
+	if err := s.audit(store.AuditTokenCreate, actor, "", "", name+" ("+role+")", now); err != nil {
+		return nil, err
+	}
 	return &wire.TokenCreateResponse{ID: t.ID, Token: raw}, nil
 }
 
@@ -67,6 +69,5 @@ func (s *Service) RevokeToken(id, actor string, now int64) error {
 	if err := s.store.RevokeAdminToken(id, now); err != nil {
 		return err
 	}
-	s.audit(store.AuditTokenRevoke, actor, "", "", t.Name, now)
-	return nil
+	return s.audit(store.AuditTokenRevoke, actor, "", "", t.Name, now)
 }

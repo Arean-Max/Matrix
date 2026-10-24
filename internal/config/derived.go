@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ func (c *Config) MasterKey() ([]byte, error) {
 	}
 	raw, err := os.ReadFile(path)
 	if err == nil {
+		if runtime.GOOS != "windows" {
+			if st, statErr := os.Stat(path); statErr == nil && st.Mode().Perm()&0o077 != 0 {
+				return nil, fmt.Errorf("master key file %s permissions are too open (%#o); want 0600", path, st.Mode().Perm())
+			}
+		}
 		b, err := hex.DecodeString(strings.TrimSpace(string(raw)))
 		if err != nil || len(b) != 32 {
 			return nil, fmt.Errorf("master key file %s: want 64 hex characters", path)

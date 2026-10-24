@@ -156,6 +156,13 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("store: corrupt schema_version %q", v)
 		}
 	}
+	latest := 0
+	if len(migrations) > 0 {
+		latest = migrations[len(migrations)-1].version
+	}
+	if current > latest {
+		return fmt.Errorf("store: database schema version %d is newer than binary supports (%d)", current, latest)
+	}
 	for _, m := range migrations {
 		if m.version <= current {
 			continue

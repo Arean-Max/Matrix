@@ -37,8 +37,7 @@ func (s *Service) RevokeDevice(deviceID, actor string, now int64) error {
 	if err := s.store.SetDeviceStatus(deviceID, store.DeviceRevoked, now); err != nil {
 		return err
 	}
-	s.audit(store.AuditDeviceRevoke, actor, d.LicenseID, deviceID, "", now)
-	return nil
+	return s.audit(store.AuditDeviceRevoke, actor, d.LicenseID, deviceID, "", now)
 }
 
 func (s *Service) ReleaseDevice(deviceID, actor string, now int64) error {
@@ -52,6 +51,5 @@ func (s *Service) ReleaseDevice(deviceID, actor string, now int64) error {
 	if err := s.store.SetDeviceStatus(deviceID, store.DeviceReleased, now); err != nil {
 		return err
 	}
-	s.audit(store.AuditDeviceRelease, actor, d.LicenseID, deviceID, "", now)
-	return nil
+	return s.audit(store.AuditDeviceRelease, actor, d.LicenseID, deviceID, "", now)
 }
